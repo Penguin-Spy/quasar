@@ -1,5 +1,6 @@
 local Buffer = require "buffer"
 local log = require "log"
+local registry = require "registry"
 
 ---@class Connection
 ---@field sock LuaSocket
@@ -13,11 +14,13 @@ local Connection = {}
 ---| 2 # login
 ---| 3 # login, waiting for client to acknowledge
 ---| 4 # configuration
+---| 5 # play
 local STATE_HANDSHAKE = 0
 local STATE_STATUS = 1
 local STATE_LOGIN = 2
 local STATE_LOGIN_WAIT_ACK = 3
 local STATE_CONFIGURATION = 4
+local STATE_PLAY = 5
 
 -- Sends a packet to the client.
 ---@param packet_id integer
@@ -25,6 +28,7 @@ local STATE_CONFIGURATION = 4
 function Connection:send(packet_id, data)
   data = Buffer.encode_varint(packet_id) .. data
   data = Buffer.encode_varint(#data) .. data
+  log("send: %s", data:gsub(".", function(char) return string.format("%02X", char:byte()) end))
   self.sock:send(data)
 end
 
@@ -78,17 +82,27 @@ function Connection:handle_packet()
     --
   elseif packet_id == 0x03 and self.state == STATE_LOGIN_WAIT_ACK then
     log("login ack")
+    self:send(0x05, registry)  -- send registry data
+    self:send(0x02, "")        -- then tell client we're finished with configuration, u can ack when you're done sending stuff
     self.state = STATE_CONFIGURATION
 
     --
   elseif packet_id == 0x00 and self.state == STATE_CONFIGURATION then
     self.buffer:read_to_end()
     print("client information")
+
     --
   elseif packet_id == 0x01 and self.state == STATE_CONFIGURATION then
     local channel = self.buffer:read_string()
     local data = self.buffer:read_to_end()
     log("plugin message (configuration) on channel '%s' with data: '%s'", channel, data)
+
+    --
+  elseif packet_id == 0x02 and self.state == STATE_CONFIGURATION then
+    log("configuration finish ack")
+    -- TODO: send Login (play)
+    self.state = STATE_PLAY
+
     --
   else
     log("received unexpected packet id 0x%02X in state %s", packet_id, self.state)
@@ -114,7 +128,7 @@ function Connection:loop()
     local _, err, data = self.sock:receivepartial("*a")
     if err == "timeout" then
       self.buffer:append(data)
-      log(self.buffer:dump())
+      log("receive %s", self.buffer:dump())
       repeat
         local length = self.buffer:try_read_varint()
         if length == 254 and self.buffer:peek_byte() == 0xFA then
