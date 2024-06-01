@@ -9,6 +9,7 @@
 
 local string_byte = string.byte
 local string_sub = string.sub
+local string_pack = string.pack
 
 ---@class Buffer
 local Buffer = {}
@@ -138,6 +139,27 @@ local function encode_string(str)
   return encode_varint(#str) .. str
 end
 
+-- Static method that encodes a Short.
+---@param value integer
+---@return string
+local function encode_short(value)
+  return string_pack(">i2", value)
+end
+
+-- Static method that encodes an Int.
+---@param value integer
+---@return string
+local function encode_int(value)
+  return string_pack(">i4", value)
+end
+
+-- Static method that encodes a Long.
+---@param value integer
+---@return string
+local function encode_long(value)
+  return string_pack(">i8", value)
+end
+
 -- Constructs a new Buffer
 ---@return Buffer
 local function new()
@@ -150,5 +172,8 @@ end
 return {
   new = new,
   encode_varint = encode_varint,
-  encode_string = encode_string
+  encode_string = encode_string,
+  encode_short = encode_short,
+  encode_int = encode_int,
+  encode_long = encode_long
 }

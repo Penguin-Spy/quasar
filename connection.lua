@@ -11,6 +11,7 @@
 local Buffer = require "buffer"
 local log = require "log"
 local registry = require "registry"
+local NBT = require "nbt"
 
 ---@class Connection
 ---@field sock LuaSocket
@@ -47,6 +48,35 @@ function Connection:close()
   self.sock:close()
   -- clear any data we might still have so the loop() doesn't try to read more packets
   self.buffer.data = ""
+end
+
+-- Sends a full "Chunk Data and Update Light" packet to the client.
+---@param chunk_x integer
+---@param chunk_z integer
+function Connection:send_chunk(chunk_x, chunk_z, block)
+  local chunk_data = ""
+
+  for i = 1, 16 do
+    chunk_data = chunk_data .. Buffer.encode_short(1)                     -- block count
+        .. '\0' .. Buffer.encode_varint((block == 0 and 0 or block + i))  -- block palette - type 0, single valued
+        .. Buffer.encode_varint(0)                                        -- size of data array (0 for single valued)
+        .. '\0' .. Buffer.encode_varint(0)                                -- biome palette - type 0, single valued: 0
+        .. Buffer.encode_varint(0)                                        -- size of data array (0 for single valued)
+  end
+
+  local packet = Buffer.encode_int(chunk_x) .. Buffer.encode_int(chunk_z)
+      .. NBT.compound{}                     -- empty heightmaps
+      .. Buffer.encode_varint(#chunk_data)  -- chunk data size
+      .. chunk_data                         -- chunk data
+      .. Buffer.encode_varint(0)            -- # of block entites
+      .. Buffer.encode_varint(0)            -- sky light mask (BitSet of length 0)
+      .. Buffer.encode_varint(0)            -- block light mask (BitSet of length 0)
+      .. Buffer.encode_varint(0)            -- empty sky light mask (BitSet of length 0)
+      .. Buffer.encode_varint(0)            -- empty sky light mask (BitSet of length 0)
+      .. Buffer.encode_varint(0)            -- sky light array count (empty array)
+      .. Buffer.encode_varint(0)            -- block light array count (empty array)
+
+  self:send(0x25, packet)
 end
 
 -- Handles a single packet
@@ -110,8 +140,74 @@ function Connection:handle_packet()
     --
   elseif packet_id == 0x02 and self.state == STATE_CONFIGURATION then
     log("configuration finish ack")
-    -- TODO: send Login (play)
+    -- send login (Corresponds to "Loading terrain..." on the client connection screen)
+    self:send(0x29, Buffer.encode_int(0)
+      .. '\0' .. Buffer.encode_varint(0)              -- no dimensions (?)
+      .. Buffer.encode_varint(0)                      -- "max players" (unused)
+      .. Buffer.encode_varint(10)                     -- view dist
+      .. Buffer.encode_varint(5)                      -- sim dist
+      .. '\0\1\0'                                     -- reduced debug, respawn screen, limited crafting
+      .. Buffer.encode_string("minecraft:overworld")  -- starting dim type & name
+      .. Buffer.encode_string("minecraft:overworld")
+      .. Buffer.encode_long(0)                        -- hashed seeed
+      .. '\1\255\0\0\0'                               -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
+      .. Buffer.encode_varint(0)                      -- portal cooldown (unknown use)
+    )
+
+    self:send(0x20, "\13\0\0\0\0")  -- game event 13 (start waiting for chunks), float param of always 0
+
+    -- send chunks (this closes the connection screen and shows the player in the world)
+    for x = -4, 4 do
+      for z = -4, 4 do
+        self:send_chunk(x, z, x + z)
+      end
+    end
+
+    -- synchronize player position
+    self:send(0x3E, string.pack(">dddffb", 0, 260, 0, 0, 0, 0) .. Buffer.encode_varint(3))
+
     self.state = STATE_PLAY
+
+    --
+  elseif packet_id == 0x00 and self.state == STATE_PLAY then
+    log("confirm teleport id: " .. self.buffer:read_varint())
+
+    --
+  elseif packet_id == 0x10 and self.state == STATE_PLAY then
+    local channel = self.buffer:read_string()
+    local data = self.buffer:read_to_end()
+    log("plugin message (play) on channel '%s' with data: '%s'", channel, data)
+
+    --
+  elseif packet_id == 0x17 and self.state == STATE_PLAY then
+    self.buffer:read_to_end()
+    log("set player position")
+
+    --
+  elseif packet_id == 0x18 and self.state == STATE_PLAY then
+    self.buffer:read_to_end()
+    log("set player position and rotation")
+
+    --
+  elseif packet_id == 0x19 and self.state == STATE_PLAY then
+    self.buffer:read_to_end()
+    log("set player rotation")
+
+    --
+  elseif packet_id == 0x1A and self.state == STATE_PLAY then
+    log("player on ground: %q", self.buffer:byte() ~= 0)
+
+    --
+  elseif packet_id == 0x20 and self.state == STATE_PLAY then
+    local abilities = self.buffer:byte()
+    log("player abilities: %02X", abilities)
+
+    --
+  elseif packet_id == 0x22 and self.state == STATE_PLAY then
+    local entity_id = self.buffer:read_varint()
+    local action = self.buffer:read_varint()
+    local horse_jump_boost = self.buffer:read_varint()
+    log("player command: %i %i %i", entity_id, action, horse_jump_boost)
 
     --
   else
