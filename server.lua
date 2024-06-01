@@ -1,3 +1,12 @@
+--[[ server.lua © Penguin_Spy 2024
+
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
+  This Source Code Form is "Incompatible With Secondary Licenses", as
+  defined by the Mozilla Public License, v. 2.0.
+]]
+
 local copas = require "copas"
 local socket = require "socket"
 local Connection = require "connection"
@@ -34,7 +43,7 @@ function Server.listen(address, port)
     end
   end
 
-  copas.addserver(server_socket, copas.handler(connection_handler --[[, ssl_params]]), "endstone_server")
+  copas.addserver(server_socket, copas.handler(connection_handler  --[[, ssl_params]]), "minecraft_server")
   Server.run()
 end
 
