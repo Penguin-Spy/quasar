@@ -40,6 +40,23 @@ function Buffer:read(length)
   return data
 end
 
+-- Sets the position of the "end boundary".<br>
+-- A subsequent call to `Buffer:read_to_end()` will return all remaining data up to the end boundary.<br>
+---@see Buffer.read_to_end
+---@param length integer
+function Buffer:set_end(length)
+  -- (END - OLD) + new = n
+  self.end_boundary = length - #self.data
+end
+
+-- Reads all data up to the "end boundary".<br>
+-- The calculation will be incorrect if any data is appended to the buffer between the two calls.
+---@see Buffer.set_end
+function Buffer:read_to_end()
+  -- (end - old) + NEW = n
+  return self:read(self.end_boundary + #self.data)
+end
+
 -- Attempts to read a VarInt from the start of the buffer.
 ---@return integer?
 function Buffer:try_read_varint()
@@ -55,25 +72,33 @@ function Buffer:try_read_varint()
   error("too long or invalid VarInt")
 end
 
--- Attempts to read a String from the start of the buffer.
----@return string?
-function Buffer:try_read_string()
+-- Reads a VarInt from the start of the buffer.
+---@return integer
+function Buffer:read_varint()
+  local value = self:try_read_varint()
+  if not value then error("reached end of buffer while reading VarInt") end
+  return value
+end
+
+-- Reads a String from the start of the buffer.
+---@return string
+function Buffer:read_string()
   local length = self:try_read_varint()
-  if not length then return end
+  if not length then error("reached end of buffer while reading String") end
   return self:read(length)
 end
 
--- Attempts to read a Short from the start of the buffer.
----@return integer?
-function Buffer:try_read_short()
+-- Reads a Short from the start of the buffer.
+---@return integer
+function Buffer:read_short()
   local hi, lo = string_byte(self.data, 1, 2)
   self.data = string_sub(self.data, 3)
   return (hi << 8) + lo
 end
 
--- Attempts to read an Int from the start of the buffer.
----@return integer?
-function Buffer:try_read_int()
+-- Reads an Int from the start of the buffer.
+---@return integer
+function Buffer:read_int()
   local hi, gh, lo, w = string_byte(self.data, 1, 4)
   self.data = string_sub(self.data, 5)
   return (hi << 24) + (gh << 16) + (lo << 8) + w
