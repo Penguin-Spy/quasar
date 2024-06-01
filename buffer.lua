@@ -13,7 +13,7 @@ end
 -- Splits off and returns the first byte of the buffer.
 ---@return integer
 function Buffer:byte()
-  local data = string_byte(self.data, 1)
+  local data = string_byte(self.data)
   self.data = string_sub(self.data, 2)
   return data
 end
@@ -21,7 +21,7 @@ end
 -- Returns the first byte of the buffer without modifying it.
 ---@return integer
 function Buffer:peek_byte()
-  return string_byte(self.data, 1)
+  return string_byte(self.data)
 end
 
 -- Debugging function; returns the data in the buffer as a hex string.
@@ -44,7 +44,7 @@ end
 ---@return integer?
 function Buffer:try_read_varint()
   local value = 0
-  for i = 0, 3 * 7, 7 do
+  for i = 0, 5 * 7, 7 do
     local b = self:byte()
     if not b then return end
     value = value + ((b & 0x7F) << i)
@@ -61,6 +61,22 @@ function Buffer:try_read_string()
   local length = self:try_read_varint()
   if not length then return end
   return self:read(length)
+end
+
+-- Attempts to read a Short from the start of the buffer.
+---@return integer?
+function Buffer:try_read_short()
+  local hi, lo = string_byte(self.data, 1, 2)
+  self.data = string_sub(self.data, 3)
+  return (hi << 8) + lo
+end
+
+-- Attempts to read an Int from the start of the buffer.
+---@return integer?
+function Buffer:try_read_int()
+  local hi, gh, lo, w = string_byte(self.data, 1, 4)
+  self.data = string_sub(self.data, 5)
+  return (hi << 24) + (gh << 16) + (lo << 8) + w
 end
 
 -- Static method that encodes a value as a VarInt.

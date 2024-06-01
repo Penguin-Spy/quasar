@@ -21,3 +21,9 @@ function socket:receivepartial(pattern) end
 function socket:send(data) end
 
 function socket:close() end
+
+--
+---@return string|nil     ip      The IP address of the remote peer, or `nil` on error
+---@return integer|string port    The port of the remote peer, or an error message
+---@return string?        family  The type of connection of the remote peer
+function socket:getpeername() end

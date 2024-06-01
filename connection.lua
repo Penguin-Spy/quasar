@@ -37,7 +37,7 @@ function Connection:handle_packet()
     print("handshake")
     local protocol_id = self.buffer:try_read_varint()
     local server_addr = self.buffer:try_read_string()
-    local server_port = (self.buffer:byte() << 8) + self.buffer:byte()
+    local server_port = self.buffer:try_read_short()
     local next_state = self.buffer:try_read_varint()
     print("  from protocol " .. protocol_id
       .. " addr " .. server_addr
@@ -52,9 +52,9 @@ function Connection:handle_packet()
     --
   elseif packet_id == 0x00 and self.state == STATE_STATUS then
     print("status request")
-    self:send(0x00,
-      Buffer.encode_string(
-        "{\"version\":{\"name\":\"1.20.4\",\"protocol\":765},\"players\":{\"max\":0,\"online\":2,\"sample\":[{\"name\":\"Penguin_Spy\",\"id\":\"dfbd911d-9775-495e-aac3-efe339db7efd\"}]},\"description\":{\"text\":\"woah haiii :3\"},\"enforcesSecureChat\":false,\"previewsChat\":false,\"preventsChatReports\":true}"))
+    self:send(0x00, Buffer.encode_string(
+      "{\"version\":{\"name\":\"1.20.4\",\"protocol\":765},\"players\":{\"max\":0,\"online\":2,\"sample\":[{\"name\":\"Penguin_Spy\",\"id\":\"dfbd911d-9775-495e-aac3-efe339db7efd\"}]},\"description\":{\"text\":\"woah haiii :3\"},\"enforcesSecureChat\":false,\"previewsChat\":false,\"preventsChatReports\":true}"
+    ))
 
     --
   elseif packet_id == 0x01 and self.state == STATE_STATUS then
@@ -66,33 +66,48 @@ function Connection:handle_packet()
   end
 end
 
+function Connection:handle_legacy_ping()
+  self.buffer:read(27)                              -- discard irrelevant stuff
+  local protocol_id = self.buffer:byte()
+  local str_len = self.buffer:try_read_short() * 2  -- UTF-16BE
+  local server_addr = self.buffer:read(str_len)
+  local server_port = self.buffer:try_read_int()
+  print("legacy ping from protocol " .. protocol_id .. " addr " .. server_addr .. " port " .. server_port)
+  self.sock:send("\xFF\x00\031\x00\xA7\x001\x00\x00\x001\x002\x007\x00\x00\x001\x00.\x002\x000\x00.\x004\x00\x00\x00w\x00o\x00a\x00h\x00 \x00h\x00a\x00i\x00i\x00i\x00 \x00:\x003\x00\x00\x000\x00\x00\x000")
+  self:close()
+end
+
 -- Receive loop
 function Connection:loop()
+  print("started connection " .. tostring(self))
   while true do
     local _, err, data = self.sock:receivepartial("*a")
-    if err == "closed" then
-      print("closed", self.sock)
-      break
-    elseif err == "timeout" then
+    if err == "timeout" then
       self.buffer:append(data)
       print(self.buffer:dump())
       repeat
         local length = self.buffer:try_read_varint()
-        if length then
-          print("read length", length)
+        if length == 254 and self.buffer:peek_byte() == 0xFA then
+          self:handle_legacy_ping()
+        elseif length then
           self:handle_packet()
         else
-          print("not read length", length)
         end
       until not length
     else
-      print("error", err)
+      print("socket '" .. tostring(self) .. "' receive error: " .. tostring(err))
+      break
     end
   end
 end
 
 function Connection:tostring()
-  return "connection " .. tostring(self.sock)
+  local ip, port, family = self.sock:getpeername()
+  if ip then
+    return "Connection " .. ip .. ":" .. port .. " (" .. family .. ")"
+  else
+    return "Connection " .. tostring(self.sock)
+  end
 end
 
 local mt = {
