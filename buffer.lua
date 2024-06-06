@@ -10,6 +10,7 @@
 local string_byte = string.byte
 local string_sub = string.sub
 local string_pack = string.pack
+local string_unpack = string.unpack
 
 ---@class Buffer
 local Buffer = {}
@@ -114,6 +115,19 @@ function Buffer:read_int()
   return (hi << 24) + (gh << 16) + (lo << 8) + w
 end
 
+-- Reads a Position from the start of the buffer.
+---@return blockpos
+function Buffer:read_position()
+  local data = string_unpack(">I8", self:read(8))
+  local x = data >> 38
+  local y = data << 52 >> 52
+  local z = data << 26 >> 38
+  if x >= 1 << 25 then x = x - (1 << 26) end
+  if y >= 1 << 11 then y = y - (1 << 12) end
+  if z >= 1 << 25 then z = z - (1 << 26) end
+  return { x = x, y = y, z = z }
+end
+
 -- Static method that encodes a value as a VarInt.
 ---@param value integer
 ---@return string
@@ -160,6 +174,13 @@ local function encode_long(value)
   return string_pack(">i8", value)
 end
 
+-- Static method that encodes a Position.
+---@param pos blockpos
+---@return string
+local function encode_position(pos)
+  return string_pack(">I8", ((pos.x & 0x3FFFFFF) << 38) | ((pos.z & 0x3FFFFFF) << 12) | (pos.y & 0xFFF))
+end
+
 -- Constructs a new Buffer
 ---@return Buffer
 local function new()
@@ -175,5 +196,6 @@ return {
   encode_string = encode_string,
   encode_short = encode_short,
   encode_int = encode_int,
-  encode_long = encode_long
+  encode_long = encode_long,
+  encode_position = encode_position
 }

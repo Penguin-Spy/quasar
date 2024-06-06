@@ -12,11 +12,13 @@ local Buffer = require "buffer"
 local log = require "log"
 local registry = require "registry"
 local NBT = require "nbt"
+local Player = require "player"
 
 ---@class Connection
 ---@field sock LuaSocket
 ---@field buffer Buffer
 ---@field state state
+---@field server Server
 local Connection = {}
 
 ---@alias state
@@ -53,15 +55,16 @@ end
 -- Sends a full "Chunk Data and Update Light" packet to the client.
 ---@param chunk_x integer
 ---@param chunk_z integer
-function Connection:send_chunk(chunk_x, chunk_z, block)
+---@param data table      The chunk data
+function Connection:send_chunk(chunk_x, chunk_z, data)
   local chunk_data = ""
 
   for i = 1, 16 do
-    chunk_data = chunk_data .. Buffer.encode_short(1)                     -- block count
-        .. '\0' .. Buffer.encode_varint((block == 0 and 0 or block + i))  -- block palette - type 0, single valued
-        .. Buffer.encode_varint(0)                                        -- size of data array (0 for single valued)
-        .. '\0' .. Buffer.encode_varint(0)                                -- biome palette - type 0, single valued: 0
-        .. Buffer.encode_varint(0)                                        -- size of data array (0 for single valued)
+    chunk_data = chunk_data .. Buffer.encode_short(16)  -- block count
+        .. '\0' .. Buffer.encode_varint(data[i])        -- block palette - type 0, single valued
+        .. Buffer.encode_varint(0)                      -- size of data array (0 for single valued)
+        .. '\0' .. Buffer.encode_varint(0)              -- biome palette - type 0, single valued: 0
+        .. Buffer.encode_varint(0)                      -- size of data array (0 for single valued)
   end
 
   local packet = Buffer.encode_int(chunk_x) .. Buffer.encode_int(chunk_z)
@@ -77,6 +80,13 @@ function Connection:send_chunk(chunk_x, chunk_z, block)
       .. Buffer.encode_varint(0)            -- block light array count (empty array)
 
   self:send(0x25, packet)
+end
+
+-- Sends a Block Update packet to the client.
+---@param pos blockpos
+---@param state integer   The block state ID to set at the position
+function Connection:send_block(pos, state)
+  self:send(0x09, Buffer.encode_position(pos) .. Buffer.encode_varint(state))
 end
 
 -- Handles a single packet
@@ -114,7 +124,16 @@ function Connection:handle_packet()
     local uuid = self.buffer:read(16)
     log("login start: '%s' (%s)", username, uuid_str)
     -- TODO: encryption & compression
-    -- for now we just always accept the player
+
+    local accept, message = self.server.on_login(username)
+    if not accept then
+      self:send(0x00, Buffer.encode_string('{"text":"' .. tostring(message) .. '"}'))
+      self:close()
+      return
+    end
+
+    self.player = Player._new(username, uuid_str, self)
+
     -- Send login success (corresponds to "Joining world..." on the client connection screen)
     self:send(0x02, uuid .. Buffer.encode_string(username) .. Buffer.encode_varint(0))
     self.state = STATE_LOGIN_WAIT_ACK
@@ -129,7 +148,7 @@ function Connection:handle_packet()
     --
   elseif packet_id == 0x00 and self.state == STATE_CONFIGURATION then
     self.buffer:read_to_end()
-    print("client information")
+    log("client information")
 
     --
   elseif packet_id == 0x01 and self.state == STATE_CONFIGURATION then
@@ -140,15 +159,33 @@ function Connection:handle_packet()
     --
   elseif packet_id == 0x02 and self.state == STATE_CONFIGURATION then
     log("configuration finish ack")
+
+    local player = self.player
+    -- allow setup of player event handlers & loading inventory, dimension, etc.
+    local accept, message = self.server.on_join(player)
+    if not accept then
+      self:send(0x1B, NBT.compound{ text = tostring(message) })
+      self:close()
+      return
+    end
+
+    -- add the player to the default dimension if the on_join handler didn't add them to any
+    if not player.dimension then
+      player.dimension = self.server.get_default_dimension()
+    end
+    local dim = player.dimension
+    dim:add_player(player)
+
     -- send login (Corresponds to "Loading terrain..." on the client connection screen)
-    self:send(0x29, Buffer.encode_int(0)
-      .. '\0' .. Buffer.encode_varint(0)              -- no dimensions (?)
+    self:send(0x29, Buffer.encode_int(0) .. '\0'      -- entity id, is hardcore
+      .. Buffer.encode_varint(1)                      -- dimensions
+      .. Buffer.encode_string("minecraft:the_end")
       .. Buffer.encode_varint(0)                      -- "max players" (unused)
       .. Buffer.encode_varint(10)                     -- view dist
       .. Buffer.encode_varint(5)                      -- sim dist
       .. '\0\1\0'                                     -- reduced debug, respawn screen, limited crafting
       .. Buffer.encode_string("minecraft:overworld")  -- starting dim type & name
-      .. Buffer.encode_string("minecraft:overworld")
+      .. Buffer.encode_string(dim.identifier)
       .. Buffer.encode_long(0)                        -- hashed seeed
       .. '\1\255\0\0\0'                               -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
       .. Buffer.encode_varint(0)                      -- portal cooldown (unknown use)
@@ -159,7 +196,7 @@ function Connection:handle_packet()
     -- send chunks (this closes the connection screen and shows the player in the world)
     for x = -4, 4 do
       for z = -4, 4 do
-        self:send_chunk(x, z, x + z)
+        self:send_chunk(x, z, dim:get_chunk(x, z, player))
       end
     end
 
@@ -210,6 +247,39 @@ function Connection:handle_packet()
     log("player command: %i %i %i", entity_id, action, horse_jump_boost)
 
     --
+  elseif packet_id == 0x2C and self.state == STATE_PLAY then
+    local slot = self.buffer:read_short()
+    log("select slot %i", slot)
+    self.player:select_hotbar_slot(slot)
+
+    --
+  elseif packet_id == 0x0E and self.state == STATE_PLAY then
+    log("close screen %i", self.buffer:byte())
+
+    --
+  elseif packet_id == 0x29 and self.state == STATE_PLAY then
+    local action, tab_id = self.buffer:read_varint()
+    if action == 0 then
+      tab_id = self.buffer:read_string()
+    end
+    log("seen advancements: action %i, tab %s", action, tab_id or "n/a")
+
+    --
+  elseif packet_id == 0x21 and self.state == STATE_PLAY then
+    local action = self.buffer:read_varint()
+    local pos = self.buffer:read_position()
+    local face = self.buffer:byte()
+    local seq = self.buffer:read_varint()
+    log("player action: action %i, pos (%i,%i,%i), face %i, seq %i", action, pos.x, pos.y, pos.z, face, seq)
+
+    self.player.dimension:on_break_block(self.player, pos)
+    -- acknowledge the block breaking so the client shows the block state the server says instead of its predicted state
+    self:send(0x05, Buffer.encode_varint(seq))
+
+    --
+  elseif packet_id == 0x33 and self.state == STATE_PLAY then
+    log("swing arm %i", self.buffer:read_varint())
+    --
   else
     log("received unexpected packet id 0x%02X in state %s", packet_id, self.state)
     self:close()
@@ -247,6 +317,9 @@ function Connection:loop()
       until not length
     else
       log("close '%s' - %s", self, err)
+      if self.player then  -- if this connection was in the game
+        self.player.dimension:remove_player(self.player)
+      end
       break
     end
   end
@@ -268,12 +341,14 @@ local mt = {
 
 -- Constructs a new Connection on the give socket
 ---@param sock LuaSocket
+---@param server Server  a reference to the Server (can't require bc circular dependency)
 ---@return Connection
-local function new(sock)
+local function new(sock, server)
   local self = {
     sock = sock,
     buffer = Buffer.new(),
-    state = STATE_HANDSHAKE
+    state = STATE_HANDSHAKE,
+    server = server
   }
   setmetatable(self, mt)
   return self
