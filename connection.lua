@@ -13,6 +13,7 @@ local log = require "log"
 local registry = require "registry"
 local NBT = require "nbt"
 local Player = require "player"
+local Item = require "item"
 
 ---@class Connection
 ---@field sock LuaSocket
@@ -148,7 +149,7 @@ function Connection:handle_packet()
     --
   elseif packet_id == 0x00 and self.state == STATE_CONFIGURATION then
     self.buffer:read_to_end()
-    log("client information")
+    log("client information (configuration)")
 
     --
   elseif packet_id == 0x01 and self.state == STATE_CONFIGURATION then
@@ -210,6 +211,11 @@ function Connection:handle_packet()
     log("confirm teleport id: " .. self.buffer:read_varint())
 
     --
+  elseif packet_id == 0x09 and self.state == STATE_PLAY then
+    self.buffer:read_to_end()
+    log("client information (play)")
+
+    --
   elseif packet_id == 0x10 and self.state == STATE_PLAY then
     local channel = self.buffer:read_string()
     local data = self.buffer:read_to_end()
@@ -250,7 +256,22 @@ function Connection:handle_packet()
   elseif packet_id == 0x2C and self.state == STATE_PLAY then
     local slot = self.buffer:read_short()
     log("select slot %i", slot)
-    self.player:select_hotbar_slot(slot)
+    self.player:on_select_hotbar_slot(slot)
+
+    --
+  elseif packet_id == 0x2F and self.state == STATE_PLAY then
+    local slot = self.buffer:read_short()
+    local present = self.buffer:byte()
+    if present == 0 then
+      log("set slot %i to no item", slot)
+      self.player:on_set_slot(slot, nil)
+    else
+      local item_id = self.buffer:read_varint()
+      local item_count = self.buffer:byte()
+      local nbt = self.buffer:read_to_end()
+      log("set slot %i to item #%i x%i", slot, item_id, item_count)
+      self.player:on_set_slot(slot, Item._new(item_id, item_count, nbt))
+    end
 
     --
   elseif packet_id == 0x0E and self.state == STATE_PLAY then
@@ -279,6 +300,34 @@ function Connection:handle_packet()
     --
   elseif packet_id == 0x33 and self.state == STATE_PLAY then
     log("swing arm %i", self.buffer:read_varint())
+
+    --
+  elseif packet_id == 0x35 and self.state == STATE_PLAY then
+    local hand = self.buffer:read_varint()
+    local pos = self.buffer:read_position()
+    local face = self.buffer:byte()
+    local cursor_x = self.buffer:read_float()
+    local cursor_y = self.buffer:read_float()
+    local cursor_z = self.buffer:read_float()
+    local inside_block = self.buffer:byte() == 1
+    local seq = self.buffer:read_varint()
+
+    local slot = hand == 1 and 45 or self.player.selected_slot + 36
+    log("use item of hand %i (slot %i) on block (%i,%i,%i) face %i at (%f,%f,%f) in block: %q", hand, slot, pos.x, pos.y, pos.z, face, cursor_x, cursor_y, cursor_z, inside_block)
+    self.player.dimension:on_use_item_on_block(self.player, slot, pos, face, { x = cursor_x, y = cursor_y, z = cursor_z }, inside_block)
+    -- acknowledge the item use
+    self:send(0x05, Buffer.encode_varint(seq))
+
+    --
+  elseif packet_id == 0x36 and self.state == STATE_PLAY then
+    local hand = self.buffer:read_varint()
+    local seq = self.buffer:read_varint()
+    local slot = hand == 1 and 45 or self.player.selected_slot + 36
+    log("use item of hand %i (slot %i)", hand, slot)
+    self.player.dimension:on_use_item(self.player, slot)
+    -- acknowledge the item use
+    self:send(0x05, Buffer.encode_varint(seq))
+
     --
   else
     log("received unexpected packet id 0x%02X in state %s", packet_id, self.state)

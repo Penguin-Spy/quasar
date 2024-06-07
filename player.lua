@@ -11,15 +11,16 @@
 ---@field username string
 ---@field uuid uuid
 ---@field inventory table<integer, table>
+---@field selected_slot integer  0-8
 ---@field position table
 ---@field connection Connection
 ---@field dimension Dimension
 local Player = {}
 
 --
----@param slot integer 1-9
-function Player:select_hotbar_slot(slot)
-  -- nothing
+---@param slot integer 0-8
+function Player:on_select_hotbar_slot(slot)
+  self.selected_slot = slot
 end
 
 -- Updates the block at the specified position for the player.
@@ -27,6 +28,13 @@ end
 ---@param state integer     The block state ID to set at the position
 function Player:set_block(position, state)
   self.connection:send_block(position, state)
+end
+
+-- when the creative inventory is used to set the item in a slot
+---@param slot integer  the slot index
+---@param item Item?    the item to put in the slot, or nil to clear the slot
+function Player:on_set_slot(slot, item)
+  self.inventory[slot] = item
 end
 
 -- dont' use this
@@ -39,6 +47,7 @@ function Player._new(username, uuid, con)
     username = username,
     uuid = uuid,
     inventory = {},
+    selected_slot = 0,
     position = {},
     connection = con
   }

@@ -43,6 +43,7 @@ function Buffer:dump(length)
   return (data:gsub(".", function(char) return string.format("%02X", char:byte()) end))
 end
 
+-- Splits off and returns a sequence of bytes from the start of the buffer.
 ---@param length integer  How many bytes to return.
 ---@return string
 function Buffer:read(length)
@@ -61,7 +62,7 @@ function Buffer:set_end(length)
 end
 
 -- Reads all data up to the "end boundary".<br>
--- The calculation will be incorrect if any data is appended to the buffer between the two calls.
+-- The calculation will be incorrect if any data is appended to the buffer between the two calls.<br>
 ---@see Buffer.set_end
 function Buffer:read_to_end()
   -- (end - old) + NEW = n
@@ -113,6 +114,18 @@ function Buffer:read_int()
   local hi, gh, lo, w = string_byte(self.data, 1, 4)
   self.data = string_sub(self.data, 5)
   return (hi << 24) + (gh << 16) + (lo << 8) + w
+end
+
+-- Reads a Float from the start of the buffer.
+---@return number
+function Buffer:read_float()
+  return (string_unpack(">f", self:read(4)))
+end
+
+-- Reads a Double from the start of the buffer.
+---@return number
+function Buffer:read_double()
+  return (string_unpack(">d", self:read(8)))
 end
 
 -- Reads a Position from the start of the buffer.

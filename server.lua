@@ -11,6 +11,8 @@ local copas = require "copas"
 local socket = require "socket"
 local Connection = require "connection"
 local Dimension = require "dimension"
+local util = require "util"
+local log = require "log"
 
 --[[local ssl_params = {
   wrap = {
@@ -26,6 +28,8 @@ local Dimension = require "dimension"
 local identifier_pattern = "^[%l%d_%-]+:[%l%d_%-]+$"
 
 ---@class Server
+---@field address string  The IP address the server is listening for connections on. `0.0.0.0` means any address.
+---@field port integer    The port the server is listening for connections on.
 local Server = {}
 
 ---@type table<identifier, Dimension>
@@ -101,7 +105,7 @@ local server_socket
 
 -- Listens for connections on the specified address and port.
 ---@param address string  The address to listen on, or `"*"` to listen on any address
----@param port integer    The port to listen on, usually `25565`
+---@param port integer    The port to listen on, usually `25565`, may be `0` to listen on an ephemeral port
 function Server.listen(address, port)
   server_socket = assert(socket.bind(address, port))
 
@@ -110,22 +114,20 @@ function Server.listen(address, port)
     table.insert(connections, con)
     con:loop()
     -- remove connection from table when it closes
-    for i, c in pairs(connections) do
-      if c == con then
-        connections[i] = nil
-      end
-    end
+    util.remove_value(connections, con)
   end
 
   copas.addserver(server_socket, copas.handler(connection_handler  --[[, ssl_params]]), "minecraft_server")
 
   -- make sure a default dimension exists
   if not default_dimension then
-    _, default_dimension = next(dimensions)
-    if default_dimension == nil then
-      error("At least one dimension must be created before starting the server!")
-    end
+    error("At least one dimension must be created and set as the default dimension before starting the server!")
   end
+
+  local listen_address, listen_port, listen_family = server_socket:getsockname()
+  log("Listening for connections to %s:%i (%s)", listen_address, listen_port, listen_family)
+  Server.address = listen_address
+  Server.port = listen_port
 
   Server.run()
 end

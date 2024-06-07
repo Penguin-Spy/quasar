@@ -9,6 +9,7 @@
 ]]
 
 local log = require "log"
+local util = require "util"
 
 ---@class Dimension
 ---@field identifier identifier
@@ -21,6 +22,41 @@ local Dimension = {}
 ---@param position blockpos a table with the fields x,y,z
 function Dimension:on_break_block(player, position)
   self:set_block(position, 0)
+end
+
+-- Called when the player uses an item while not looking at a block.
+---@param player Player
+---@param slot integer  the slot containing the item used (45 for offhand, else 36-44 for hotbar)
+function Dimension:on_use_item(player, slot)
+  log("'%s' used the item in slot #%i: %s", player.username, slot, player.inventory[slot])
+end
+
+
+-- Called when the player "uses" an item against a block (usually placing a block, but is sent for all items).
+---@param player Player the player who used the item
+---@param slot integer  the slot containing the item used (45 for offhand, else 36-44 for hotbar)
+---@param pos blockpos  the position of the block the item was used against
+---@param face integer  the face of the block the item was used against
+---@param cursor {x: number, y: number, z:number} values range from `0.0` to `1.0` indicating where on the block face the item was used
+---@param inside_block boolean  whether the client reports its head being inside a block when using the item
+function Dimension:on_use_item_on_block(player, slot, pos, face, cursor, inside_block)
+  log("'%s' used the item in slot #%i: %s on the block at (%i, %i, %i)'s face %i, cursor pos (%f, %f, %f), inside block: %q",
+    player.username, slot, player.inventory[slot], pos.x, pos.y, pos.z, face, cursor.x, cursor.y, cursor.z, inside_block)
+  -- offset the position based on the face
+  if face == 0 then
+    pos.y = pos.y - 1
+  elseif face == 1 then
+    pos.y = pos.y + 1
+  elseif face == 2 then
+    pos.z = pos.z - 1
+  elseif face == 3 then
+    pos.z = pos.z + 1
+  elseif face == 4 then
+    pos.x = pos.x - 1
+  else  --if face == 5 then
+    pos.x = pos.x + 1
+  end
+  self:set_block(pos, 1)
 end
 
 
@@ -56,12 +92,7 @@ end
 -- You likely want to use `Player:change_dimension` instead.
 ---@param player Player
 function Dimension:remove_player(player)
-  for k, v in pairs(self.players) do
-    if v == player then
-      self.players[k] = nil
-      return
-    end
-  end
+  util.remove_value(self.players, player)
 end
 
 -- Creates a new Dimension. You should not call this function yourself, instead use `Server.create_dimension`!

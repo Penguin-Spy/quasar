@@ -27,7 +27,7 @@ function the_nether:get_chunk(chunk_x, chunk_z)
   return { chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x }
 end
 
---Server.set_default_dimension(overworld)
+Server.set_default_dimension(overworld)
 
 function Server.on_login(username, uuid)
   --"Failed to connect to the server"
@@ -38,7 +38,7 @@ end
 function Server.on_join(player)
   -- "connection lost"
   --return false, "nope 2"
-  --player.dimension = the_nether
+  player.dimension = the_nether
   return true
 end
 
