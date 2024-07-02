@@ -17,14 +17,17 @@ local overworld = Server.create_dimension("minecraft:overworld")
 function overworld:on_break_block(player, pos)
   log("player '%s' broke a block at (%i, %i, %i)", player.username, pos.x, pos.y, pos.z)
 
-  --self.chunk_data[16] = 13
-  self:set_block(pos, 13)
+  if pos.y >= 192 then
+    self:set_block(pos, 0)
+  else
+    self:set_block(pos, 13)
+  end
 end
 
 
 local the_nether = Server.create_dimension("minecraft:the_nether")
 function the_nether:get_chunk(chunk_x, chunk_z)
-  return { chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x }
+  return { chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, 0, 0, 0, 0, 0, 0, 0, 0 }
 end
 
 Server.set_default_dimension(overworld)

@@ -27,7 +27,9 @@ end
 -- Called when the player uses an item while not looking at a block.
 ---@param player Player
 ---@param slot integer  the slot containing the item used (45 for offhand, else 36-44 for hotbar)
-function Dimension:on_use_item(player, slot)
+---@param yaw number    the player's head yaw when using the item
+---@param pitch number  the player's head pitch when using the item
+function Dimension:on_use_item(player, slot, yaw, pitch)
   log("'%s' used the item in slot #%i: %s", player.username, slot, player.inventory[slot])
 end
 
@@ -103,7 +105,7 @@ function Dimension._new(identifier)
   ---@type Dimension
   local self = {
     identifier = identifier,
-    chunk_data = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 },
+    chunk_data = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0, 0, 0, 0, 0 },
     players = {}
   }
   setmetatable(self, { __index = Dimension })
