@@ -61,6 +61,22 @@ function Dimension:on_use_item_on_block(player, slot, pos, face, cursor, inside_
   self:set_block(pos, 1)
 end
 
+-- Called when a player sends a chat message. <br>
+-- Default behavior broadcasts the message to all players in the dimension. <br>
+-- Only called if the Player's `on_chat_message` handler hasn't been set (or explicitly calls it's default behavior).
+---@param player Player   The player who sent the message
+---@param message string  The message sent
+function Dimension:on_chat_message(player, message)
+  self:broadcast_chat_message("minecraft:chat", player.username, message)
+end
+
+-- Called when the player attempts to run a command (regardless of if it's a real or valid command)
+---@param player Player   The player who ran the command
+---@param command string  The full text of the command, not including the preceeding slash '/'
+function Dimension:on_command(player, command)
+  player:send_system_message("unknown command")
+end
+
 
 -- Updates the block at the specified position for all players in this dimension.
 ---@param position blockpos
@@ -71,6 +87,24 @@ function Dimension:set_block(position, state)
   end
 end
 
+-- Broadcasts a chat message to all players in the dimension
+---@param type registry.chat_type  The chat type
+---@param sender string   The name of the one sending the message
+---@param content string  The content of the message
+---@param target string?  Optional target of the message, used in some chat types
+function Dimension:broadcast_chat_message(type, sender, content, target)
+  for _, p in pairs(self.players) do
+    p:send_chat_message(type, sender, content, target)
+  end
+end
+
+-- Broadcasts a system message to all players in the dimension
+---@param message string
+function Dimension:broadcast_system_message(message)
+  for _, p in pairs(self.players) do
+    p:send_system_message(message)
+  end
+end
 
 -- Gets the raw chunk data for the chunk at the specified position.
 ---@param chunk_x integer

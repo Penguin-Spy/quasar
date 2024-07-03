@@ -30,6 +30,16 @@ function the_nether:get_chunk(chunk_x, chunk_z)
   return { chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, 0, 0, 0, 0, 0, 0, 0, 0 }
 end
 
+---@param player Player
+---@param command string
+function the_nether:on_command(player, command)
+  if command == "hatsune miku" then
+    player:send_system_message("hatsune miku moment")
+  else
+    player:send_system_message('what no')
+  end
+end
+
 Server.set_default_dimension(overworld)
 
 function Server.on_login(username, uuid)

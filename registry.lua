@@ -90,6 +90,9 @@ local biomes = {
   "minecraft:wooded_badlands"
 }
 
+---@alias registry.chat_type
+---| '"minecraft:chat"'
+
 local chat_types = { "minecraft:chat", "minecraft:emote_command", "minecraft:msg_command_incoming", "minecraft:msg_command_outgoing", "minecraft:say_command", "minecraft:team_msg_command_incoming", "minecraft:team_msg_command_outgoing" }
 
 local trim_patterns = {

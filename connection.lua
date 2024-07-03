@@ -141,6 +141,29 @@ function Connection:send_block(pos, state)
   self:send(PLAY_clientbound.block_update, Buffer.encode_position(pos) .. Buffer.encode_varint(state))
 end
 
+-- Sends a chat message to the player
+---@param type registry.chat_type  The chat type
+---@param sender string   The name of the one sending the message
+---@param content string  The content of the message
+---@param target string?  Optional target of the message, used in some chat types
+function Connection:send_chat_message(type, sender, content, target)
+  log("sending chat message of type %q from %q with target %q and content %q", type, sender, target, content)
+  --TODO: resolving of registry types for chat_type
+  local packet = NBT.string(content) .. Buffer.encode_varint(1) .. NBT.string(sender)
+  if target then
+    packet = packet .. '\1' .. NBT.string(target)
+  else
+    packet = packet .. '\0'
+  end
+  self:send(PLAY_clientbound.disguised_chat, packet)
+end
+
+-- Sends a system message to the player
+---@param message string
+function Connection:send_system_message(message)
+  self:send(PLAY_clientbound.system_chat, NBT.string(message) .. '\0')  -- 0 is not overlay/actionbar
+end
+
 -- Sets the state of the Connection & sets the proper packet handling function
 ---@param state state
 function Connection:set_state(state)
@@ -269,6 +292,7 @@ function Connection:handle_packet_configuration(packet_id)
   if packet_id == CONFIGURATION_serverbound.select_known_packs and self.state == STATE_CONFIGURATION then
     local client_known_pack_count = self.buffer:read_varint()
     log("serverbound known packs (known on the client): %i", client_known_pack_count)
+    -- TODO: validate that the client does actually know about minecraft:core with version 1.21
     for i = 1, client_known_pack_count do
       local pack_namespace = self.buffer:read_string()
       local pack_id = self.buffer:read_string()
@@ -337,11 +361,14 @@ function Connection:handle_packet_configuration(packet_id)
       .. Buffer.encode_long(0)                                      -- hashed seeed
       .. '\1\255\0\0\0'                                             -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
       .. Buffer.encode_varint(0)                                    -- portal cooldown (unknown use)
-      .. '\0'                                                       -- enforces secure chat
+      .. '\1'                                                       -- enforces secure chat (causes giant warning toast to show up if false, seemingly no other effects?)
     )
 
     -- synchronize player position (do this first so the client doesn't default to (8.5,65,8.5) when chunks are sent)
     self:send(PLAY_clientbound.player_position, string.pack(">dddffb", 0, 194, 0, 0, 0, 0) .. Buffer.encode_varint(3))
+    -- this does stuff with flight (flying + flight disabled + 0 fly speed -> locks player in place)
+    -- invulnerable (unknown effect), flying, allow flying (allow toggling flight), creative mode/instant break (unknown effect), fly speed, fov modifier
+    --self:send(PLAY_clientbound.player_abilities, string.pack(">bff", 0x01 | 0x02 | 0x04 | 0x08, 0.05, 0.1))
 
     self:send(PLAY_clientbound.game_event, "\13\0\0\0\0")  -- game event 13 (start waiting for chunks), float param of always 0
 
@@ -362,6 +389,31 @@ end
 function Connection:handle_packet_play(packet_id)
   if packet_id == PLAY_serverbound.accept_teleportation then
     log("confirm teleport id: " .. self.buffer:read_varint())
+
+    --
+  elseif packet_id == PLAY_serverbound.chat then
+    local message = self.buffer:read_string()
+    local timestamp = self.buffer:dump(8)
+    local salt = self.buffer:dump(8)
+    self.buffer:read(16)  -- discard what we just dumped
+    local has_signature = self.buffer:byte()
+    self.buffer:read_to_end()
+    log("chat msg from '%s' at %s salt %s signed %q: %s", self.player.username, timestamp, salt, has_signature, message)
+
+    if #message > 256 then
+      error("received too long chat message")
+    end
+
+    self.player:on_chat_message(message)
+
+    --
+  elseif packet_id == PLAY_serverbound.chat_command then
+    local command = self.buffer:read_string()
+    if #command > 32767 then
+      error("received too long command")
+    end
+    log("chat command from '%s': %s", self.player.username, command)
+    self.player:on_command(command)
 
     --
   elseif packet_id == PLAY_serverbound.client_information then
@@ -422,6 +474,7 @@ function Connection:handle_packet_play(packet_id)
       local components_to_remove_count = self.buffer:read_varint()
       log("set slot %i to item #%i x%i (+%i,-%i)", slot, item_id, item_count, components_to_add_count, components_to_remove_count)
       -- TODO: read component data, construct actual item object
+      self.buffer:read_to_end()
       self.player:on_set_slot(slot, nil)
     else
       log("set slot %i to item of 0 count", slot)
@@ -487,7 +540,7 @@ function Connection:handle_packet_play(packet_id)
 
     --
   else
-    log("received unexpected packet id 0x%02X in play state %s", packet_id, self.state)
+    log("received unexpected packet id 0x%02X in play state (%s)", packet_id, self.state)
     self:close()
   end
 end
