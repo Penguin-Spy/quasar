@@ -22,9 +22,10 @@ local log = require "log"
   }
 }]]
 
----@alias identifier string   A Minecraft identifier, in the form of `"namespace:thing"`
----@alias uuid       string   A UUID in binary form.
----@alias blockpos   {x: integer, y: integer, z: integer} A block position in the world
+---@alias identifier string                                     A Minecraft identifier, in the form of `"namespace:thing"`
+---@alias uuid       string                                     A UUID in binary form.
+---@alias blockpos   {x: integer, y: integer, z: integer}       A block position in the world
+---@alias text_component (string|{text:string,color:string?})   A text component. May be either a string containing plain text or a Lua table representing a text component.
 
 local identifier_pattern = "^[%l%d_%-]+:[%l%d_%-]+$"
 
@@ -51,7 +52,7 @@ function Server.create_dimension(identifier, options)
   local dim = Dimension._new(identifier)
   dimensions[identifier] = dim
   dim.timer = copas_timer.new{
-    name      = "quasar_dimension_" .. identifier,
+    name      = "quasar_dimension[" .. identifier .. "]",
     recurring = true,
     delay     = 0.05,  -- 20 ticks per second
     callback  = function() dim:tick() end
@@ -89,7 +90,7 @@ local players = {}
 ---@param username string   The username sent by the client
 ---@param uuid uuid?        Always `nil` - authentication is not implemented yet
 ---@return boolean?         accept  A falsy return value will disconnect the player immediately
----@return (string|table)?  message The message to display to the player when disconnected. The client will show this with a title of "Failed to connect to the server"
+---@return text_component?  message The message to display to the player when disconnected. The client will show this with a title of "Failed to connect to the server"
 function Server.on_login(username, uuid)
   -- for now we just always accept the player
   return true
@@ -99,7 +100,7 @@ end
 -- This function can be used to load data for the player (such as their inventory) or specify the dimension they should join in.
 ---@param player Player
 ---@return boolean?         accept  A falsy return value will disconnect the player
----@return (string|table)?  message The message to display to the player when disconnected. The client will show this with a title of "Connection lost"
+---@return text_component?  message The message to display to the player when disconnected. The client will show this with a title of "Connection lost"
 function Server.on_join(player)
   return true
 end
@@ -155,10 +156,10 @@ function Server.run()
 
       -- close the server socket
       copas.removeserver(server_socket)
-      -- close every Connection
+      -- close every Connection and Dimension
       local n_clients, n_dimensions = 0, 0
       for _, con in pairs(connections) do
-        con:close()
+        con:disconnect{ translate = "multiplayer.disconnect.server_shutdown" }
         n_clients = n_clients + 1
       end
       for _, dim in pairs(dimensions) do

@@ -8,6 +8,7 @@
 ]]
 
 local json = require 'lunajson'
+local copas_timer = require 'copas.timer'
 
 local Buffer = require "buffer"
 local log = require "log"
@@ -64,6 +65,9 @@ end
 ---@field server Server
 ---@field current_teleport_id integer
 ---@field current_teleport_acknowledged boolean
+---@field keepalive_timer table?
+---@field keepalive_id number?
+---@field keepalive_received boolean
 local Connection = {}
 
 ---@alias state
@@ -122,15 +126,45 @@ end
 function Connection:send(packet_id, data)
   data = Buffer.encode_varint(packet_id) .. data
   data = Buffer.encode_varint(#data) .. data
-  log("send '%s': %s", self, data:gsub(".", function(char) return string.format("%02X", char:byte()) end))
+  log("send: %s", data:gsub(".", function(char) return string.format("%02X", char:byte()) end))
   self.sock:send(data)
 end
 
--- Immediatley closes this connection; does not send any information to the client.
+-- Immediately closes this connection; does not send any information to the client.
 function Connection:close()
   self.sock:close()
   -- clear any data we might still have so the loop() doesn't try to read more packets
   self.buffer.data = ""
+  -- cancel the keepalive timer if it exists
+  if self.keepalive_timer then
+    self.keepalive_timer:cancel()
+  end
+end
+
+-- Disconnects the client with a message. The message will only be sent in the login & play stages, but the connection will always be closed.
+---@param message text_component   A table containing a text component: `{ text = "reason" }`
+function Connection:disconnect(message)
+  if type(message) ~= "table" then
+    message = { text = tostring(message) }
+  end
+  if self.state == STATE_LOGIN then
+    self:send(LOGIN_clientbound.login_disconnect, Buffer.encode_string(json.encode(message)))
+  elseif self.state == STATE_PLAY then
+    self:send(PLAY_clientbound.disconnect, NBT.compound(message))
+  end
+  self:close()
+end
+
+-- Checks if the client has responded to the previous keep alive message. <br>
+-- If it has, sends the next keep alive message with a new ID. <br>
+-- If it hasn't, disconnects the client using the `"disconnect.timeout"` translation key.
+function Connection:keepalive()
+  if not self.keepalive_received then
+    self:disconnect{ translate = "disconnect.timeout" }
+    return
+  end
+  self.keepalive_id = math.random(math.mininteger, math.maxinteger)  -- lua integers are the same range as a Long
+  self:send(PLAY_clientbound.keep_alive, Buffer.encode_long(self.keepalive_id))
 end
 
 -- Sends a full "Chunk Data and Update Light" packet to the client.
@@ -292,7 +326,8 @@ function Connection:handle_packet_handshake(packet_id)
     elseif next_state == 2 then
       self:set_state(STATE_LOGIN)
     else  -- can't accept transfer logins (yet?)
-      self:close()
+      self:set_state(STATE_LOGIN)
+      self:disconnect{ translate = "multiplayer.disconnect.transfers_disabled" }
     end
   else
     log("received unexpected packet id 0x%02X in handshake state (%i)", packet_id, self.state)
@@ -347,8 +382,7 @@ function Connection:handle_packet_login(packet_id)
 
     local accept, message = self.server.on_login(username)
     if not accept then
-      self:send(LOGIN_clientbound.login_disconnect, Buffer.encode_string('{"text":"' .. tostring(message) .. '"}'))
-      self:close()
+      self:disconnect(message or "Login refused")
       return
     end
 
@@ -380,7 +414,7 @@ function Connection:handle_packet_login(packet_id)
   end
 end
 
--- Handles a single packet in the login state
+-- Handles a single packet in the configuration state
 ---@param packet_id integer
 function Connection:handle_packet_configuration(packet_id)
   -- only valid to receive BEFORE we've sent the finish_configuration packet
@@ -432,7 +466,7 @@ function Connection:handle_packet_configuration(packet_id)
     -- allow setup of player event handlers & loading inventory, dimension, etc.
     local accept, message = self.server.on_join(player)
     if not accept then
-      self:send(PLAY_clientbound.disconnect, NBT.compound{ text = tostring(message) })
+      self:disconnect(message or "Join refused")
       self:close()
       return
     end
@@ -474,6 +508,14 @@ function Connection:handle_packet_configuration(packet_id)
         self:send_chunk(x, z, dim:get_chunk(x, z, player))
       end
     end
+
+    self.keepalive_timer = copas_timer.new{
+      name      = "quasar_connection_keepalive[" .. player.username .. "]",
+      recurring = true,
+      delay     = 15,
+      callback  = function() self:keepalive() end
+    }
+    self:keepalive()  -- start the keepalive cycle
   else
     log("received unexpected packet id 0x%02X in configuration state (%i)", packet_id, self.state)
     self:close()
@@ -483,7 +525,15 @@ end
 -- Handles a single packet in the play state
 ---@param packet_id integer
 function Connection:handle_packet_play(packet_id)
-  if packet_id == PLAY_serverbound.accept_teleportation then
+  if packet_id == PLAY_serverbound.keep_alive then
+    local keepalive_id = self.buffer:read_long()
+    if keepalive_id == self.keepalive_id then
+      self.keepalive_received = true
+    else
+      log("ignoring incorrect keepalive id %i", keepalive_id)
+    end
+    --
+  elseif packet_id == PLAY_serverbound.accept_teleportation then
     local teleport_id = self.buffer:read_varint()
     if teleport_id == self.current_teleport_id then
       log("confirm teleport #%i", teleport_id)
@@ -686,6 +736,9 @@ function Connection:loop()
           self.player.dimension:_remove_player(self.player)
         end
       end
+      if self.keepalive_timer then
+        self.keepalive_timer:cancel()
+      end
       break
     end
   end
@@ -717,7 +770,8 @@ local function new(sock, server)
     state = STATE_HANDSHAKE,
     server = server,
     current_teleport_id = 0,
-    current_teleport_acknowledged = true
+    current_teleport_acknowledged = true,
+    keepalive_received = true
   }
   setmetatable(self, mt)
   return self

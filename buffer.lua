@@ -128,6 +128,12 @@ function Buffer:read_double()
   return (string_unpack(">d", self:read(8)))
 end
 
+-- Reads a Long from the start of the buffer.
+---@return integer
+function Buffer:read_long()
+  return (string_unpack(">i8", self:read(8)))
+end
+
 -- Reads a Position from the start of the buffer.
 ---@return blockpos
 function Buffer:read_position()
