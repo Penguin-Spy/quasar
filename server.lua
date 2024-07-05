@@ -8,6 +8,7 @@
 ]]
 
 local copas = require "copas"
+local copas_timer = require "copas.timer"
 local socket = require "socket"
 local Connection = require "connection"
 local Dimension = require "dimension"
@@ -49,6 +50,12 @@ function Server.create_dimension(identifier, options)
   end
   local dim = Dimension._new(identifier)
   dimensions[identifier] = dim
+  dim.timer = copas_timer.new{
+    name      = "quasar_dimension_" .. identifier,
+    recurring = true,
+    delay     = 0.05,  -- 20 ticks per second
+    callback  = function() dim:tick() end
+  }
   return dim
 end
 
@@ -117,7 +124,7 @@ function Server.listen(address, port)
     util.remove_value(connections, con)
   end
 
-  copas.addserver(server_socket, copas.handler(connection_handler  --[[, ssl_params]]), "minecraft_server")
+  copas.addserver(server_socket, copas.handler(connection_handler  --[[, ssl_params]]), "quasar_server")
 
   -- make sure a default dimension exists
   if not default_dimension then
@@ -149,12 +156,17 @@ function Server.run()
       -- close the server socket
       copas.removeserver(server_socket)
       -- close every Connection
-      local n = 0
+      local n_clients, n_dimensions = 0, 0
       for _, con in pairs(connections) do
         con:close()
-        n = n + 1
+        n_clients = n_clients + 1
       end
-      print("Closed server and " .. n .. " clients")
+      for _, dim in pairs(dimensions) do
+        dim.timer:cancel()
+        n_dimensions = n_dimensions + 1
+      end
+      log("Closed server, %i clients, and %i dimensions", n_clients, n_dimensions)
+      return
     end
   until copas.finished()
   return success, msg

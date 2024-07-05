@@ -10,11 +10,17 @@
 
 local log = require "log"
 local util = require "util"
+local Vector3 = require "Vector3"
+local Entity = require "entity"
 
 ---@class Dimension
+---@field timer table?  Copas timer for dimension ticking
 ---@field identifier identifier
 ---@field chunk_data table
 ---@field players Player[]      All players currently in this Dimension
+---@field entities Entity[]
+---@field next_entity_id number Starts at 1
+---@field spawnpoint Vector3   The position where newly added players will spawn in
 local Dimension = {}
 
 -- Called when a player breaks a block
@@ -77,6 +83,29 @@ function Dimension:on_command(player, command)
   player:send_system_message("unknown command")
 end
 
+-- Called when a player joins this Dimension. Useful for updating position & inventory.
+---@param player Player
+function Dimension:on_player_joined(player)
+  player.position:copy(self.spawnpoint)
+end
+
+-- Ran 20 times per second. Handles updating the position of entites, including players.
+function Dimension:tick()
+  for _, e in pairs(self.entities) do
+    if e.position ~= e.last_sync_pos or e.pitch ~= e.last_sync_pitch or e.yaw ~= e.last_sync_yaw then
+      --local dx, dy, dz = e.position.x - e.last_sync_pos.x, e.position.y - e.last_sync_pos.y, e.position.z - e.last_sync_pos.z
+      --if math.abs(dx) >
+      log("syncing pos of %q", e.id)
+      for _, p in pairs(self.players) do
+        p:move_entity(e)
+      end
+      e.last_sync_pos:copy(e.position)
+      e.last_sync_pitch = e.pitch
+      e.last_sync_yaw = e.yaw
+    end
+  end
+end
+
 
 -- Updates the block at the specified position for all players in this dimension.
 ---@param position blockpos
@@ -106,6 +135,20 @@ function Dimension:broadcast_system_message(message)
   end
 end
 
+-- Spawns a new entity into this dimension.
+---@param type registry.entity_type
+---@param position Vector3
+---@return Entity
+function Dimension:spawn_entity(type, position)
+  local entity = Entity._new(self.next_entity_id, type, position)
+  self.next_entity_id = self.next_entity_id + 1
+  self.entities[entity.id] = entity
+  for _, p in pairs(self.players) do
+    p:add_entity(entity)
+  end
+  return entity
+end
+
 -- Gets the raw chunk data for the chunk at the specified position.
 ---@param chunk_x integer
 ---@param chunk_z integer
@@ -115,20 +158,44 @@ function Dimension:get_chunk(chunk_x, chunk_z, player)
   return self.chunk_data
 end
 
--- Adds the player to this Dimension. The player will receive packets for changes happening in this dimension.<br>
--- Note that this will not inform the client that they have changed dimensions!<br>
--- You likely want to use `Player:change_dimension` instead.
+-- Spawns the player into the dimension, adding their player entity & raising `on_player_join`.
 ---@param player Player
-function Dimension:add_player(player)
+function Dimension:_add_player(player)
+  -- inform this player of all other players, then add it to the list
+  player:add_players(self.players)
   table.insert(self.players, player)
+
+  -- inform the player of all existing entities
+  for _, e in pairs(self.entities) do
+    player:add_entity(e)
+  end
+  -- then add the player as an entity in this Dimension
+  player.id = self.next_entity_id
+  self.next_entity_id = self.next_entity_id + 1
+  self.entities[player.id] = player
+
+  -- update stuff like the player's position
+  self:on_player_joined(player)
+
+  -- inform all other players of this player & its entity
+  for _, other_player in pairs(self.players) do
+    other_player:add_players{ player }  -- informs the player about its own player data
+    if other_player ~= player then
+      other_player:add_entity(player)
+    end
+  end
 end
 
--- Removes the player from this Dimension. The player will no longer receive packets for changes happening in this dimension.<br>
--- Note that this will not inform the client that they have changed dimensions!<br>
--- You likely want to use `Player:change_dimension` instead.
+-- Removes the player from this Dimension, despawning their player entity.
 ---@param player Player
-function Dimension:remove_player(player)
+function Dimension:_remove_player(player)
   util.remove_value(self.players, player)
+  self.entities[player.id] = nil
+  for _, other_player in pairs(self.players) do
+    other_player:remove_players{ player }
+    other_player:remove_entities{ player }
+  end
+  player.id = nil
 end
 
 -- Creates a new Dimension. You should not call this function yourself, instead use `Server.create_dimension`!
@@ -140,7 +207,10 @@ function Dimension._new(identifier)
   local self = {
     identifier = identifier,
     chunk_data = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0, 0, 0, 0, 0 },
-    players = {}
+    players = {},
+    entities = {},
+    next_entity_id = 1,
+    spawnpoint = Vector3.new(0, 194, 0)
   }
   setmetatable(self, { __index = Dimension })
   return self

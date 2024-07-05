@@ -7,14 +7,16 @@
   defined by the Mozilla Public License, v. 2.0.
 ]]
 
----@class Player
+local Vector3 = require "Vector3"
+
+---@class Player : Entity
 ---@field username string
 ---@field uuid uuid
----@field inventory table<integer, table>
+---@field inventory table<integer, Item>
 ---@field selected_slot integer  0-8
----@field position table
 ---@field connection Connection
 ---@field dimension Dimension
+---@field on_ground boolean     True if the client thinks it's on the ground
 local Player = {}
 
 --
@@ -66,18 +68,56 @@ function Player:send_system_message(message)
   self.connection:send_system_message(message)
 end
 
--- dont' use this
+-- Informs this player that the specified other players exist
+---@param players Player[]
+function Player:add_players(players)
+  self.connection:add_players(players)
+end
+
+-- Informs this player that the specified entity spawned
+---@param entity Entity
+function Player:add_entity(entity)
+  self.connection:add_entity(entity)
+end
+
+-- Informs this player of the new position of the entity
+---@param entity Entity
+function Player:move_entity(entity)
+  self.connection:send_move_entity(entity)
+end
+
+-- Informs this player that the specified other players no longer exist
+---@param players Player[]
+function Player:remove_players(players)
+  self.connection:remove_players(players)
+end
+
+-- Informs this player that the specified entities no longer exist
+---@param entities Entity[]
+function Player:remove_entities(entities)
+  self.connection:remove_entities(entities)
+end
+
+-- Internal method
 ---@param username string
 ---@param uuid string       The player's UUID in binary form.
 ---@param con Connection
 ---@return Player
 function Player._new(username, uuid, con)
   local self = {
+    type = "minecraft:player",  -- for Entity
+    position = Vector3.new(),
+    pitch = 0,
+    yaw = 0,
+    last_sync_pos = Vector3.new(),
+    last_sync_pitch = 0,
+    last_sync_yaw = 0,
     username = username,
     uuid = uuid,
     inventory = {},
     selected_slot = 0,
-    connection = con
+    connection = con,
+    on_ground = false
   }
   setmetatable(self, { __index = Player })
   return self

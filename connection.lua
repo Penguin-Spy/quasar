@@ -11,6 +11,7 @@ local json = require 'lunajson'
 
 local Buffer = require "buffer"
 local log = require "log"
+local util = require "util"
 local registry = require "registry"
 local NBT = require "nbt"
 local Player = require "player"
@@ -26,15 +27,7 @@ local CONFIGURATION_clientbound
 local PLAY_serverbound
 local PLAY_clientbound
 do
-  local f = io.open("packets.json", "r")
-  if not f then
-    error("failed to open packets.json (expected in current directory) - https://minecraft.wiki/w/Tutorials/Running_the_data_generator")
-    return
-  end
-  local packets_json = f:read("a")
-  f:close()
-
-  local packets = json.decode(packets_json)
+  local packets = util.read_json("packets.json")
 
   local function flatten(t)
     local t2 = {}
@@ -69,6 +62,8 @@ end
 ---@field buffer Buffer
 ---@field state state
 ---@field server Server
+---@field current_teleport_id integer
+---@field current_teleport_acknowledged boolean
 local Connection = {}
 
 ---@alias state
@@ -87,13 +82,47 @@ local STATE_CONFIGURATION = 4
 local STATE_CONFIGURATION_WAIT_ACK = 5
 local STATE_PLAY = 6
 
+
+-- Converts the angles sent by the client to the ranges used on the server.
+---@param yaw number
+---@param pitch number
+---@return number yaw, number pitch
+local function receive_facing(yaw, pitch)
+  if yaw < 0 then
+    yaw = math.fmod(yaw, 360) + 360
+  else
+    yaw = math.fmod(yaw, 360)
+  end
+  if pitch > 90 then
+    pitch = 90
+  elseif pitch < -90 then
+    pitch = -90
+  end
+  return yaw, pitch
+end
+
+-- Converts the angles used on the server to the correct format for sending to the client.
+---@param yaw number
+---@param pitch number
+---@return integer yaw, integer pitch
+local function send_facing(yaw, pitch)
+  yaw = math.floor(yaw * (255 / 360))
+  if pitch < 0 then
+    pitch = math.floor((pitch + 360) * (255 / 360))
+  else
+    pitch = math.floor(pitch * (255 / 360))
+  end
+  return yaw, pitch
+end
+
+
 -- Sends a packet to the client.
 ---@param packet_id integer
 ---@param data string
 function Connection:send(packet_id, data)
   data = Buffer.encode_varint(packet_id) .. data
   data = Buffer.encode_varint(#data) .. data
-  log("send: %s", data:gsub(".", function(char) return string.format("%02X", char:byte()) end))
+  log("send '%s': %s", self, data:gsub(".", function(char) return string.format("%02X", char:byte()) end))
   self.sock:send(data)
 end
 
@@ -141,14 +170,15 @@ function Connection:send_block(pos, state)
   self:send(PLAY_clientbound.block_update, Buffer.encode_position(pos) .. Buffer.encode_varint(state))
 end
 
--- Sends a chat message to the player
+-- Sends a chat message to the client.
 ---@param type registry.chat_type  The chat type
 ---@param sender string   The name of the one sending the message
 ---@param content string  The content of the message
 ---@param target string?  Optional target of the message, used in some chat types
 function Connection:send_chat_message(type, sender, content, target)
   log("sending chat message of type %q from %q with target %q and content %q", type, sender, target, content)
-  --TODO: resolving of registry types for chat_type
+  --TODO: resolving of registry types for chat_type.
+  -- also chat type here appears to be indexed starting at 1? instead of 0 like other registries
   local packet = NBT.string(content) .. Buffer.encode_varint(1) .. NBT.string(sender)
   if target then
     packet = packet .. '\1' .. NBT.string(target)
@@ -158,11 +188,75 @@ function Connection:send_chat_message(type, sender, content, target)
   self:send(PLAY_clientbound.disguised_chat, packet)
 end
 
--- Sends a system message to the player
+-- Sends a system message to the client.
 ---@param message string
 function Connection:send_system_message(message)
   self:send(PLAY_clientbound.system_chat, NBT.string(message) .. '\0')  -- 0 is not overlay/actionbar
 end
+
+-- Informs the client that the specified other players exist
+---@param players Player[]
+function Connection:add_players(players)
+  -- 0x01 Add Player | 0x08 Update Listed, # of players in the array
+  local players_data = '\x09' .. Buffer.encode_varint(#players)
+  for _, player in pairs(players) do
+    -- uuid, username, 0 properties, is listed
+    players_data = players_data .. player.uuid .. Buffer.encode_string(player.username) .. Buffer.encode_varint(0) .. '\1'
+  end
+  self:send(PLAY_clientbound.player_info_update, players_data)
+end
+
+-- Informs the client that the specified entity spawned
+---@param entity Entity
+function Connection:add_entity(entity)
+  local type_id = registry.entity_types[entity.type]
+  local yaw, pitch = send_facing(entity.yaw, entity.pitch)
+  self:send(PLAY_clientbound.add_entity, Buffer.encode_varint(entity.id) .. entity.uuid .. Buffer.encode_varint(type_id)
+    .. string.pack(">dddBBB", entity.position.x, entity.position.y, entity.position.z, pitch, yaw, yaw)  -- xyz, pitch yaw head_yaw
+    .. Buffer.encode_varint(0)                                                                           -- "data" (depends on entity type)
+    .. string.pack(">i2i2i2", 0, 0, 0)
+  )
+end
+
+-- Informs the client of the new position of the entity
+---@param entity Entity
+function Connection:send_move_entity(entity)
+  local yaw, pitch = send_facing(entity.yaw, entity.pitch)
+  self:send(PLAY_clientbound.teleport_entity, Buffer.encode_varint(entity.id) .. string.pack(">dddBBB",
+    entity.position.x, entity.position.y, entity.position.z, yaw, pitch, 1  -- 1 is on ground
+  ))
+  self:send(PLAY_clientbound.rotate_head, Buffer.encode_varint(entity.id) .. string.char(yaw))
+end
+
+-- Informs the client that the specified other players no longer exist
+---@param players Player[]
+function Connection:remove_players(players)
+  local players_data = Buffer.encode_varint(#players)
+  for _, player in pairs(players) do
+    players_data = players_data .. player.uuid
+  end
+  self:send(PLAY_clientbound.player_info_remove, players_data)
+end
+
+-- Informs the client that the specified entities no longer exist
+---@param entities Entity[]
+function Connection:remove_entities(entities)
+  local entities_data = Buffer.encode_varint(#entities)
+  for _, entity in pairs(entities) do
+    entities_data = entities_data .. Buffer.encode_varint(entity.id)
+  end
+  self:send(PLAY_clientbound.remove_entities, entities_data)
+end
+
+-- Synchronizes the Player's position with the client. Handles the "Teleport ID" stuff with the accept teleport packet.
+function Connection:synchronize_position()
+  self.current_teleport_id = self.current_teleport_id + 1
+  self.current_teleport_acknowledged = false
+  local pos = self.player.position
+  local yaw, pitch = self.player.yaw, self.player.pitch  -- as floats, not 1/256ths of rotation
+  self:send(PLAY_clientbound.player_position, string.pack(">dddffb", pos.x, pos.y, pos.z, yaw, pitch, 0) .. Buffer.encode_varint(self.current_teleport_id))
+end
+
 
 -- Sets the state of the Connection & sets the proper packet handling function
 ---@param state state
@@ -246,8 +340,9 @@ function Connection:handle_packet_login(packet_id)
   if packet_id == LOGIN_serverbound.hello and self.state == STATE_LOGIN then
     local username = self.buffer:read_string()
     local uuid_str = self.buffer:dump(16)
-    local uuid = self.buffer:read(16)
-    log("login start: '%s' (%s)", username, uuid_str)
+    self.buffer:read_to_end()  -- discard client-sent UUID
+    local uuid = util.new_UUID()
+    log("login start: '%s' (client sent %s, joining as %s)", username, uuid_str, util.UUID_to_string(uuid))
     -- TODO: encryption & compression
 
     local accept, message = self.server.on_login(username)
@@ -257,7 +352,7 @@ function Connection:handle_packet_login(packet_id)
       return
     end
 
-    self.player = Player._new(username, uuid_str, self)
+    self.player = Player._new(username, uuid, self)
 
     -- Send login success (corresponds to "Joining world..." on the client connection screen)
     self:send(LOGIN_clientbound.game_profile, uuid .. Buffer.encode_string(username) .. Buffer.encode_varint(0) .. '\1')  -- last byte is strict error handling
@@ -301,17 +396,18 @@ function Connection:handle_packet_configuration(packet_id)
     end
 
     -- send registry data
-    self:send(CONFIGURATION_clientbound.registry_data, registry["worldgen/biome"])
-    self:send(CONFIGURATION_clientbound.registry_data, registry.chat_type)
-    self:send(CONFIGURATION_clientbound.registry_data, registry.trim_pattern)
-    self:send(CONFIGURATION_clientbound.registry_data, registry.trim_material)
-    self:send(CONFIGURATION_clientbound.registry_data, registry.wolf_variant)
-    self:send(CONFIGURATION_clientbound.registry_data, registry.painting_variant)
-    self:send(CONFIGURATION_clientbound.registry_data, registry.dimension_type)
-    self:send(CONFIGURATION_clientbound.registry_data, registry.damage_type)
-    self:send(CONFIGURATION_clientbound.registry_data, registry.banner_pattern)
-    self:send(CONFIGURATION_clientbound.registry_data, registry.enchantment)
-    self:send(CONFIGURATION_clientbound.registry_data, registry.jukebox_song)
+    local regs = registry.network_data
+    self:send(CONFIGURATION_clientbound.registry_data, regs["worldgen/biome"])
+    self:send(CONFIGURATION_clientbound.registry_data, regs.chat_type)
+    self:send(CONFIGURATION_clientbound.registry_data, regs.trim_pattern)
+    self:send(CONFIGURATION_clientbound.registry_data, regs.trim_material)
+    self:send(CONFIGURATION_clientbound.registry_data, regs.wolf_variant)
+    self:send(CONFIGURATION_clientbound.registry_data, regs.painting_variant)
+    self:send(CONFIGURATION_clientbound.registry_data, regs.dimension_type)
+    self:send(CONFIGURATION_clientbound.registry_data, regs.damage_type)
+    self:send(CONFIGURATION_clientbound.registry_data, regs.banner_pattern)
+    self:send(CONFIGURATION_clientbound.registry_data, regs.enchantment)
+    self:send(CONFIGURATION_clientbound.registry_data, regs.jukebox_song)
 
     self:send(CONFIGURATION_clientbound.finish_configuration, "")  -- then tell client we're finished with configuration, u can ack when you're done sending stuff
     self:set_state(STATE_CONFIGURATION_WAIT_ACK)
@@ -346,12 +442,10 @@ function Connection:handle_packet_configuration(packet_id)
       player.dimension = self.server.get_default_dimension()
     end
     local dim = player.dimension
-    dim:add_player(player)
 
     -- send login (Corresponds to "Loading terrain..." on the client connection screen)
     self:send(PLAY_clientbound.login, Buffer.encode_int(0) .. '\0'  -- entity id, is hardcore
       .. Buffer.encode_varint(0)                                    -- dimensions (appears to be ignored?)
-      --.. Buffer.encode_string("minecraft:the_end")
       .. Buffer.encode_varint(0)                                    -- "max players" (unused)
       .. Buffer.encode_varint(10)                                   -- view dist
       .. Buffer.encode_varint(5)                                    -- sim dist
@@ -363,9 +457,11 @@ function Connection:handle_packet_configuration(packet_id)
       .. Buffer.encode_varint(0)                                    -- portal cooldown (unknown use)
       .. '\1'                                                       -- enforces secure chat (causes giant warning toast to show up if false, seemingly no other effects?)
     )
+    -- spawns player in dimension and loads entities
+    dim:_add_player(player)
 
     -- synchronize player position (do this first so the client doesn't default to (8.5,65,8.5) when chunks are sent)
-    self:send(PLAY_clientbound.player_position, string.pack(">dddffb", 0, 194, 0, 0, 0, 0) .. Buffer.encode_varint(3))
+    self:synchronize_position()
     -- this does stuff with flight (flying + flight disabled + 0 fly speed -> locks player in place)
     -- invulnerable (unknown effect), flying, allow flying (allow toggling flight), creative mode/instant break (unknown effect), fly speed, fov modifier
     --self:send(PLAY_clientbound.player_abilities, string.pack(">bff", 0x01 | 0x02 | 0x04 | 0x08, 0.05, 0.1))
@@ -388,7 +484,13 @@ end
 ---@param packet_id integer
 function Connection:handle_packet_play(packet_id)
   if packet_id == PLAY_serverbound.accept_teleportation then
-    log("confirm teleport id: " .. self.buffer:read_varint())
+    local teleport_id = self.buffer:read_varint()
+    if teleport_id == self.current_teleport_id then
+      log("confirm teleport #%i", teleport_id)
+      self.current_teleport_acknowledged = true
+    else
+      log("ignoring incorrect confirm teleport #%i", teleport_id)
+    end
 
     --
   elseif packet_id == PLAY_serverbound.chat then
@@ -428,18 +530,19 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.move_player_pos then
-    self.buffer:read_to_end()
-    log("set player position")
+    self.player.position:set(self.buffer:read_double(), self.buffer:read_double(), self.buffer:read_double())
+    self.player.on_ground = self.buffer:byte() ~= 0
 
     --
   elseif packet_id == PLAY_serverbound.move_player_pos_rot then
-    self.buffer:read_to_end()
-    log("set player position and rotation")
+    self.player.position:set(self.buffer:read_double(), self.buffer:read_double(), self.buffer:read_double())
+    self.player.yaw, self.player.pitch = receive_facing(self.buffer:read_float(), self.buffer:read_float())
+    self.player.on_ground = self.buffer:byte() ~= 0
 
     --
   elseif packet_id == PLAY_serverbound.move_player_rot then
-    self.buffer:read_to_end()
-    log("set player rotation")
+    self.player.yaw, self.player.pitch = receive_facing(self.buffer:read_float(), self.buffer:read_float())
+    self.player.on_ground = self.buffer:byte() ~= 0
 
     --
   elseif packet_id == PLAY_serverbound.move_player_status_only then
@@ -580,7 +683,7 @@ function Connection:loop()
       if self.player then              -- if this connection was in the game
         -- TODO: any dimensionless player cleanup
         if self.player.dimension then  -- if this player was in a dimension
-          self.player.dimension:remove_player(self.player)
+          self.player.dimension:_remove_player(self.player)
         end
       end
       break
@@ -607,11 +710,14 @@ local mt = {
 ---@param server Server  a reference to the Server (can't require bc circular dependency)
 ---@return Connection
 local function new(sock, server)
+  ---@type Connection
   local self = {
     sock = sock,
     buffer = Buffer.new(),
     state = STATE_HANDSHAKE,
-    server = server
+    server = server,
+    current_teleport_id = 0,
+    current_teleport_acknowledged = true
   }
   setmetatable(self, mt)
   return self

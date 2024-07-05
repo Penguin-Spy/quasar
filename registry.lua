@@ -8,12 +8,53 @@
 ]]
 
 local Buffer = require "buffer"
+local util = require "util"
+
+local Registry = {}
+
+local registries_data = util.read_json("registries.json")
+
+--
+---@param registry_id identifier
+---@return table<identifier, number>|table<number, identifier>
+local function registry_to_2_way_map(registry_id)
+  local reg = registries_data[registry_id].entries
+  local map = {}
+  for k, v in pairs(reg) do
+    map[k] = v.protocol_id
+    map[v.protocol_id] = k
+  end
+  return map
+end
+
+---@alias registry.entity_type identifier
+---@alias registry.item identifier
+
+Registry.entity_types = registry_to_2_way_map("minecraft:entity_type")  --[[@as table<registry.entity_type, number>|table<number, registry.entity_type>]]
+Registry.items = registry_to_2_way_map("minecraft:item")
+
+-- in registries.json
+-- minecraft:entity_type
+-- minecraft:block -- not block state! just 'minecraft:piston' etc.
+-- minecraft:item
+-- minecraft:menu  -- the type of screen on the client
+-- minecraft:mob_effect -- potion effects
+-- minecraft:potion   -- the type of potion item (awkward, turtle master, strong_harming)
+-- minecraft:particle_effect
+-- minecraft:sound_event
+
+-- items.json contains every item and it's default components
+-- blocks.json contains every combination of block states and its network id
+
+
+----- Network registry data -----
+-- These lists come from the existence of files in the vanilla/core data pack
 
 -- Precomputes the network representation of a registry. All entries are sent with "Has data" = false
 ---@param identifier identifier
 ---@param entries identifier[]
 ---@return string data  the network representation of the registry
-local function generate_registry(identifier, entries)
+local function generate_registry_for_network(identifier, entries)
   local data = Buffer.encode_string(identifier) .. Buffer.encode_varint(#entries)
   for _, entry in ipairs(entries) do
     data = data .. Buffer.encode_string(entry) .. '\0'  -- no data (assumes client has core/vanilla data already)
@@ -129,8 +170,8 @@ local trim_materials = {
   "minecraft:redstone"
 }
 
+-- these are missing vanilla values
 local wolf_variants = { "minecraft:pale" }
-
 local painting_variants = { "minecraft:burning_skull" }
 
 local damage_types = {
@@ -183,16 +224,23 @@ local damage_types = {
   "minecraft:wither_skull"
 }
 
-return {
-  dimension_type = generate_registry("minecraft:dimension_type", dimension_types),
-  ["worldgen/biome"] = generate_registry("minecraft:worldgen/biome", biomes),
-  chat_type = generate_registry("minecraft:chat_type", chat_types),
-  trim_pattern = generate_registry("minecraft:trim_pattern", trim_patterns),
-  trim_material = generate_registry("minecraft:trim_material", trim_materials),
-  wolf_variant = generate_registry("minecraft:wolf_variant", wolf_variants),
-  painting_variant = generate_registry("minecraft:painting_variant", painting_variants),
-  damage_type = generate_registry("minecraft:damage_type", damage_types),
-  banner_pattern = generate_registry("minecraft:banner_pattern", { "minecraft:base", "minecraft:border" }),
-  enchantment = generate_registry("minecraft:enchantment", { "minecraft:aqua_affinity" }),
-  jukebox_song = generate_registry("minecraft:jukebox_song", { "minecraft:blocks" })
+-- these are missing vanilla values
+local banner_patterns = { "minecraft:base", "minecraft:border" }
+local encahntments = { "minecraft:aqua_affinity" }
+local jukebox_songs = { "minecraft:blocks" }
+
+Registry.network_data = {
+  dimension_type = generate_registry_for_network("minecraft:dimension_type", dimension_types),
+  ["worldgen/biome"] = generate_registry_for_network("minecraft:worldgen/biome", biomes),
+  chat_type = generate_registry_for_network("minecraft:chat_type", chat_types),
+  trim_pattern = generate_registry_for_network("minecraft:trim_pattern", trim_patterns),
+  trim_material = generate_registry_for_network("minecraft:trim_material", trim_materials),
+  wolf_variant = generate_registry_for_network("minecraft:wolf_variant", wolf_variants),
+  painting_variant = generate_registry_for_network("minecraft:painting_variant", painting_variants),
+  damage_type = generate_registry_for_network("minecraft:damage_type", damage_types),
+  banner_pattern = generate_registry_for_network("minecraft:banner_pattern", banner_patterns),
+  enchantment = generate_registry_for_network("minecraft:enchantment", encahntments),
+  jukebox_song = generate_registry_for_network("minecraft:jukebox_song", jukebox_songs)
 }
+
+return Registry
