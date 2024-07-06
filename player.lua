@@ -17,6 +17,8 @@ local Vector3 = require "Vector3"
 ---@field connection Connection
 ---@field dimension Dimension
 ---@field on_ground boolean     True if the client thinks it's on the ground
+---@field sneaking boolean      True if the client intends to be sneaking
+---@field sprinting boolean     True if the client intends to be sprinting
 local Player = {}
 
 --
@@ -117,7 +119,9 @@ function Player._new(username, uuid, con)
     inventory = {},
     selected_slot = 0,
     connection = con,
-    on_ground = false
+    on_ground = false,
+    sneaking = false,
+    sprinting = false
   }
   setmetatable(self, { __index = Player })
   return self

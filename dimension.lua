@@ -89,9 +89,10 @@ function Dimension:on_player_joined(player)
   player.position:copy(self.spawnpoint)
 end
 
--- Ran 20 times per second. Handles updating the position of entites, including players.
+-- Ran 20 times per second. Handles updating the position of entites.
 function Dimension:tick()
-  for _, e in pairs(self.entities) do
+  -- TODO: shouldn't sync player positions here (but players are currently part of the entities list)
+  --[[for _, e in pairs(self.entities) do
     if e.position ~= e.last_sync_pos or e.pitch ~= e.last_sync_pitch or e.yaw ~= e.last_sync_yaw then
       --local dx, dy, dz = e.position.x - e.last_sync_pos.x, e.position.y - e.last_sync_pos.y, e.position.z - e.last_sync_pos.z
       --if math.abs(dx) >
@@ -103,7 +104,7 @@ function Dimension:tick()
       e.last_sync_pitch = e.pitch
       e.last_sync_yaw = e.yaw
     end
-  end
+  end]]
 end
 
 

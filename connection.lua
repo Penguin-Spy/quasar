@@ -68,6 +68,7 @@ end
 ---@field keepalive_timer table?
 ---@field keepalive_id number?
 ---@field keepalive_received boolean
+---@field listening_connections Connection[]
 local Connection = {}
 
 ---@alias state
@@ -167,6 +168,16 @@ function Connection:keepalive()
   self:send(PLAY_clientbound.keep_alive, Buffer.encode_long(self.keepalive_id))
 end
 
+-- Sends a packet to all other connections that are "listening" to this connection (sending movement/pose actions to other players). <br>
+-- This avoids re-encoding the body of the packet for each player (and having to write this for loop all over the place).
+---@param packet_id integer
+---@param data string
+function Connection:send_to_all_listeners(packet_id, data)
+  for _, con in pairs(self.listening_connections) do
+    con:send(packet_id, data)
+  end
+end
+
 -- Sends a full "Chunk Data and Update Light" packet to the client.
 ---@param chunk_x integer
 ---@param chunk_z integer
@@ -236,6 +247,8 @@ function Connection:add_players(players)
   for _, player in pairs(players) do
     -- uuid, username, 0 properties, is listed
     players_data = players_data .. player.uuid .. Buffer.encode_string(player.username) .. Buffer.encode_varint(0) .. '\1'
+    -- start listening to the player's connection
+    player.connection:add_listener(self)
   end
   self:send(PLAY_clientbound.player_info_update, players_data)
 end
@@ -268,6 +281,8 @@ function Connection:remove_players(players)
   local players_data = Buffer.encode_varint(#players)
   for _, player in pairs(players) do
     players_data = players_data .. player.uuid
+    -- stop listening to the player's connection
+    player.connection:remove_listener(self)
   end
   self:send(PLAY_clientbound.player_info_remove, players_data)
 end
@@ -291,6 +306,17 @@ function Connection:synchronize_position()
   self:send(PLAY_clientbound.player_position, string.pack(">dddffb", pos.x, pos.y, pos.z, yaw, pitch, 0) .. Buffer.encode_varint(self.current_teleport_id))
 end
 
+-- Indicates that the specified connection is listening to this connection's movement/pose actions.
+---@param con Connection
+function Connection:add_listener(con)
+  table.insert(self.listening_connections, con)
+end
+
+-- Indicates that the specified connection is no longerlistening to this connection's movement/pose actions.
+---@param con Connection
+function Connection:remove_listener(con)
+  util.remove_value(self.listening_connections, con)
+end
 
 -- Sets the state of the Connection & sets the proper packet handling function
 ---@param state state
@@ -582,17 +608,26 @@ function Connection:handle_packet_play(packet_id)
   elseif packet_id == PLAY_serverbound.move_player_pos then
     self.player.position:set(self.buffer:read_double(), self.buffer:read_double(), self.buffer:read_double())
     self.player.on_ground = self.buffer:byte() ~= 0
+    for _, con in pairs(self.listening_connections) do
+      con:send_move_entity(self.player)
+    end
 
     --
   elseif packet_id == PLAY_serverbound.move_player_pos_rot then
     self.player.position:set(self.buffer:read_double(), self.buffer:read_double(), self.buffer:read_double())
     self.player.yaw, self.player.pitch = receive_facing(self.buffer:read_float(), self.buffer:read_float())
     self.player.on_ground = self.buffer:byte() ~= 0
+    for _, con in pairs(self.listening_connections) do
+      con:send_move_entity(self.player)
+    end
 
     --
   elseif packet_id == PLAY_serverbound.move_player_rot then
     self.player.yaw, self.player.pitch = receive_facing(self.buffer:read_float(), self.buffer:read_float())
     self.player.on_ground = self.buffer:byte() ~= 0
+    for _, con in pairs(self.listening_connections) do
+      con:send_move_entity(self.player)
+    end
 
     --
   elseif packet_id == PLAY_serverbound.move_player_status_only then
@@ -605,10 +640,24 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.player_command then
-    local entity_id = self.buffer:read_varint()
+    self.buffer:read_varint()  -- always the player's entity ID
     local action = self.buffer:read_varint()
-    local horse_jump_boost = self.buffer:read_varint()
-    log("player command: %i %i %i", entity_id, action, horse_jump_boost)
+    self.buffer:read_to_end()  -- VarInt horse jump strength, or 0 if not jumping
+    if action == 0 then
+      self.player.sneaking = true
+    elseif action == 1 then
+      self.player.sneaking = false
+    elseif action == 3 then
+      self.player.sprinting = true
+    elseif action == 4 then
+      self.player.sprinting = false
+    end
+    self:send_to_all_listeners(PLAY_clientbound.set_entity_data, Buffer.encode_varint(self.player.id)
+      -- sneaking causes the nametag to become fainter and hidden behind walls, sprinting causes the running particles to appear
+      .. '\0' .. Buffer.encode_varint(0) .. string.char((self.player.sneaking and 0x02 or 0) | (self.player.sprinting and 0x08 or 0))
+      -- sets the sneaking/standing pose
+      .. '\6' .. Buffer.encode_varint(21) .. Buffer.encode_varint(self.player.sneaking and 5 or 0)
+      .. '\xff')
 
     --
   elseif packet_id == PLAY_serverbound.set_carried_item then
@@ -660,7 +709,8 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.swing then
-    log("swing arm %i", self.buffer:read_varint())
+    local arm_animation = self.buffer:read_varint() == 0 and '\0' or '\3'  -- arm 0 is animation 0, arm 1 (offhand) is animation 3
+    self:send_to_all_listeners(PLAY_clientbound.animate, Buffer.encode_varint(self.player.id) .. arm_animation)
 
     --
   elseif packet_id == PLAY_serverbound.use_item_on then
@@ -771,7 +821,8 @@ local function new(sock, server)
     server = server,
     current_teleport_id = 0,
     current_teleport_acknowledged = true,
-    keepalive_received = true
+    keepalive_received = true,
+    listening_connections = {}
   }
   setmetatable(self, mt)
   return self
