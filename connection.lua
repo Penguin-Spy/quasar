@@ -11,6 +11,7 @@ local json = require 'lunajson'
 local copas_timer = require 'copas.timer'
 
 local Buffer = require "buffer"
+local SendBuffer = require 'SendBuffer'
 local log = require "log"
 local util = require "util"
 local registry = require "registry"
@@ -127,7 +128,6 @@ end
 function Connection:send(packet_id, data)
   data = Buffer.encode_varint(packet_id) .. data
   data = Buffer.encode_varint(#data) .. data
-  log("send: %s", data:gsub(".", function(char) return string.format("%02X", char:byte()) end))
   self.sock:send(data)
 end
 
@@ -181,31 +181,27 @@ end
 -- Sends a full "Chunk Data and Update Light" packet to the client.
 ---@param chunk_x integer
 ---@param chunk_z integer
----@param data table      The chunk data
-function Connection:send_chunk(chunk_x, chunk_z, data)
-  local chunk_data = ""
+---@param chunk Chunk      The chunk data
+function Connection:send_chunk(chunk_x, chunk_z, chunk)
+  local buffer = SendBuffer.new()
+  local chunk_data = chunk:get_data()
 
-  for i = 1, 24 do
-    chunk_data = chunk_data .. Buffer.encode_short(16 * 16 * 16)  -- block count
-        .. '\0' .. Buffer.encode_varint(data[i])                  -- block palette - type 0, single valued
-        .. Buffer.encode_varint(0)                                -- size of data array (0 for single valued)
-        .. '\0' .. Buffer.encode_varint(0)                        -- biome palette - type 0, single valued: 0
-        .. Buffer.encode_varint(0)                                -- size of data array (0 for single valued)
-  end
+  buffer:write_int(chunk_x)
+  buffer:write_int(chunk_z)
+  buffer:write_raw(NBT.compound{})  -- empty heightmaps
 
-  local packet = Buffer.encode_int(chunk_x) .. Buffer.encode_int(chunk_z)
-      .. NBT.compound{}                     -- empty heightmaps
-      .. Buffer.encode_varint(#chunk_data)  -- chunk data size
-      .. chunk_data                         -- chunk data
-      .. Buffer.encode_varint(0)            -- # of block entites
-      .. Buffer.encode_varint(0)            -- sky light mask (BitSet of length 0)
-      .. Buffer.encode_varint(0)            -- block light mask (BitSet of length 0)
-      .. Buffer.encode_varint(0)            -- empty sky light mask (BitSet of length 0)
-      .. Buffer.encode_varint(0)            -- empty sky light mask (BitSet of length 0)
-      .. Buffer.encode_varint(0)            -- sky light array count (empty array)
-      .. Buffer.encode_varint(0)            -- block light array count (empty array)
+  buffer:write_varint(#chunk_data)  -- chunk data size
+  buffer:write_raw(chunk_data)      -- chunk data
 
-  self:send(PLAY_clientbound.level_chunk_with_light, packet)
+  buffer:write_varint(0)            -- # of block entites
+  buffer:write_varint(0)            -- sky light mask (BitSet of length 0)
+  buffer:write_varint(0)            -- block light mask (BitSet of length 0)
+  buffer:write_varint(0)            -- empty sky light mask (BitSet of length 0)
+  buffer:write_varint(0)            -- empty sky light mask (BitSet of length 0)
+  buffer:write_varint(0)            -- sky light array count (empty array)
+  buffer:write_varint(0)            -- block light array count (empty array)
+
+  self:send(PLAY_clientbound.level_chunk_with_light, buffer:concat())
 end
 
 -- Sends a Block Update packet to the client.
@@ -332,7 +328,7 @@ function Connection:set_state(state)
   elseif state == STATE_PLAY then
     self.handle_packet = Connection.handle_packet_play
   else
-    error("unknown state %i", state)
+    error(string.format("unknown state %i", state))
   end
   self.state = state
 end
@@ -356,8 +352,7 @@ function Connection:handle_packet_handshake(packet_id)
       self:disconnect{ translate = "multiplayer.disconnect.transfers_disabled" }
     end
   else
-    log("received unexpected packet id 0x%02X in handshake state (%i)", packet_id, self.state)
-    self:close()
+    error(string.format("received unexpected packet id 0x%02X in handshake state (%i)", packet_id, self.state))
   end
 end
 
@@ -388,8 +383,7 @@ function Connection:handle_packet_status(packet_id)
 
     --
   else
-    log("received unexpected packet id 0x%02X in status state (%i)", packet_id, self.state)
-    self:close()
+    error(string.format("received unexpected packet id 0x%02X in status state (%i)", packet_id, self.state))
   end
 end
 
@@ -435,8 +429,7 @@ function Connection:handle_packet_login(packet_id)
 
     --
   else
-    log("received unexpected packet id 0x%02X in login state (%i)", packet_id, self.state)
-    self:close()
+    error(string.format("received unexpected packet id 0x%02X in login state (%i)", packet_id, self.state))
   end
 end
 
@@ -543,8 +536,7 @@ function Connection:handle_packet_configuration(packet_id)
     }
     self:keepalive()  -- start the keepalive cycle
   else
-    log("received unexpected packet id 0x%02X in configuration state (%i)", packet_id, self.state)
-    self:close()
+    error(string.format("received unexpected packet id 0x%02X in configuration state (%i)", packet_id, self.state))
   end
 end
 
@@ -606,6 +598,10 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.move_player_pos then
+    if not self.current_teleport_acknowledged then
+      self.buffer:read_to_end()
+      return
+    end
     self.player.position:set(self.buffer:read_double(), self.buffer:read_double(), self.buffer:read_double())
     self.player.on_ground = self.buffer:byte() ~= 0
     for _, con in pairs(self.listening_connections) do
@@ -614,6 +610,10 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.move_player_pos_rot then
+    if not self.current_teleport_acknowledged then
+      self.buffer:read_to_end()
+      return
+    end
     self.player.position:set(self.buffer:read_double(), self.buffer:read_double(), self.buffer:read_double())
     self.player.yaw, self.player.pitch = receive_facing(self.buffer:read_float(), self.buffer:read_float())
     self.player.on_ground = self.buffer:byte() ~= 0
@@ -623,6 +623,10 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.move_player_rot then
+    if not self.current_teleport_acknowledged then
+      self.buffer:read_to_end()
+      return
+    end
     self.player.yaw, self.player.pitch = receive_facing(self.buffer:read_float(), self.buffer:read_float())
     self.player.on_ground = self.buffer:byte() ~= 0
     for _, con in pairs(self.listening_connections) do
@@ -743,8 +747,7 @@ function Connection:handle_packet_play(packet_id)
 
     --
   else
-    log("received unexpected packet id 0x%02X in play state (%s)", packet_id, self.state)
-    self:close()
+    error(string.format("received unexpected packet id 0x%02X in play state (%s)", packet_id, self.state))
   end
 end
 
@@ -767,18 +770,22 @@ function Connection:loop()
     local _, err, data = self.sock:receivepartial("*a")
     if err == "timeout" then
       self.buffer:append(data)
-      log("receive %s", self.buffer:dump())
       repeat
+        local success, packet_err
         local length = self.buffer:try_read_varint()
         if length == 254 and self.buffer:peek_byte() == 0xFA then
           self:handle_legacy_ping()
         elseif length then
           self.buffer:set_end(length)
-          self:handle_packet(self.buffer:read_varint())
-        else
+          success, packet_err = xpcall(self.handle_packet, debug.traceback, self, self.buffer:read_varint())
+          if not success then
+            err = packet_err
+          end
         end
-      until not length
-    else
+      until not length or not success
+    end
+
+    if err ~= "timeout" then
       log("close '%s' - %s", self, err)
       if self.player then              -- if this connection was in the game
         -- TODO: any dimensionless player cleanup
@@ -788,6 +795,10 @@ function Connection:loop()
       end
       if self.keepalive_timer then
         self.keepalive_timer:cancel()
+      end
+      -- if the socket wasn't closed, this was a Lua error while handling the packet
+      if err ~= "closed" then
+        self:disconnect("Internal server error")  -- do this last in case it fails (copas will close the socket if so)
       end
       break
     end

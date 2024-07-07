@@ -27,10 +27,7 @@ end
 
 
 local the_nether = Server.create_dimension("minecraft:the_nether")
-function the_nether:get_chunk(chunk_x, chunk_z)
-  return { chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, chunk_x, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
-end
-the_nether.spawnpoint:set(-8, 66, 8)
+the_nether.spawnpoint:set(0.5, 66, 8.5)
 
 ---@param player Player
 ---@param command string

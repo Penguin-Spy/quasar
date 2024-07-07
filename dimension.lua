@@ -12,11 +12,12 @@ local log = require "log"
 local util = require "util"
 local Vector3 = require "Vector3"
 local Entity = require "entity"
+local Chunk = require 'chunk'
 
 ---@class Dimension
 ---@field timer table?  Copas timer for dimension ticking
 ---@field identifier identifier
----@field chunk_data table
+---@field chunks Chunk[][]
 ---@field players Player[]      All players currently in this Dimension
 ---@field entities Entity[]
 ---@field next_entity_id number Starts at 1
@@ -115,6 +116,8 @@ function Dimension:set_block(position, state)
   for _, p in pairs(self.players) do
     p:set_block(position, state)
   end
+  local chunk = self.chunks[position.x // 16][position.z // 16]
+  chunk:set_block(position, state)
 end
 
 -- Broadcasts a chat message to all players in the dimension
@@ -150,13 +153,13 @@ function Dimension:spawn_entity(type, position)
   return entity
 end
 
--- Gets the raw chunk data for the chunk at the specified position.
+-- Gets the chunk at the specified chunk coordinates.
 ---@param chunk_x integer
 ---@param chunk_z integer
----@param player Player   the player to get the chunk data for
----@return table data     A list of block types, from the lowest to highest subchunk.
+---@param player Player   the player to get the chunk for
+---@return Chunk chunk
 function Dimension:get_chunk(chunk_x, chunk_z, player)
-  return self.chunk_data
+  return self.chunks[chunk_x][chunk_z]
 end
 
 -- Spawns the player into the dimension, adding their player entity & raising `on_player_join`.
@@ -207,12 +210,18 @@ function Dimension._new(identifier)
   ---@type Dimension
   local self = {
     identifier = identifier,
-    chunk_data = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0, 0, 0, 0, 0 },
+    chunks = {},
     players = {},
     entities = {},
     next_entity_id = 1,
-    spawnpoint = Vector3.new(0, 194, 0)
+    spawnpoint = Vector3.new(0, 66, 0)
   }
+  for x = -4, 4 do
+    self.chunks[x] = {}
+    for z = -4, 4 do
+      self.chunks[x][z] = Chunk._new(24)
+    end
+  end
   setmetatable(self, { __index = Dimension })
   return self
 end
