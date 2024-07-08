@@ -37,26 +37,26 @@ end
 ---@return string
 function Chunk:get_data()
   -- have to have our own buffer so that the packet sending function can get the length of the data :/
-  local buffer = SendBuffer.new()
+  local buffer = SendBuffer()
   for _, subchunk in pairs(self.subchunks) do
-    buffer:write_short(16 * 16 * 16)            -- block count
+    buffer:short(16 * 16 * 16)            -- block count
 
-    buffer:write_byte(subchunk.bits_per_entry)  -- block palette bits per entry
-    buffer:write_varint(#subchunk.palette)      -- # of palette entries
+    buffer:byte(subchunk.bits_per_entry)  -- block palette bits per entry
+    buffer:varint(#subchunk.palette)      -- # of palette entries
     for _, palette_entry in pairs(subchunk.palette) do
-      buffer:write_varint(palette_entry)
+      buffer:varint(palette_entry)
     end
 
-    buffer:write_varint(#subchunk.data)  -- size of data array
+    buffer:varint(#subchunk.data)  -- size of data array
     for _, data_entry in pairs(subchunk.data) do
-      buffer:write_long(data_entry)
+      buffer:long(data_entry)
     end
 
-    buffer:write_byte(0)    -- biome palette type 0 (single valued)
-    buffer:write_varint(0)  -- single value: 0
-    buffer:write_varint(0)  -- size of data array (0 for single valued)
+    buffer:byte(0)    -- biome palette type 0 (single valued)
+    buffer:varint(0)  -- single value: 0
+    buffer:varint(0)  -- size of data array (0 for single valued)
   end
-  return buffer:concat()
+  return buffer:concat_with_length()
 end
 
 -- Internal method

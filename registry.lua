@@ -7,7 +7,7 @@
   defined by the Mozilla Public License, v. 2.0.
 ]]
 
-local Buffer = require "buffer"
+local SendBuffer = require "SendBuffer"
 local util = require "util"
 
 local Registry = {}
@@ -53,13 +53,13 @@ Registry.items = registry_to_2_way_map("minecraft:item")
 -- Precomputes the network representation of a registry. All entries are sent with "Has data" = false
 ---@param identifier identifier
 ---@param entries identifier[]
----@return string data  the network representation of the registry
+---@return SendBuffer buffer  the network representation of the registry
 local function generate_registry_for_network(identifier, entries)
-  local data = Buffer.encode_string(identifier) .. Buffer.encode_varint(#entries)
+  local buffer = SendBuffer():string(identifier):varint(#entries)
   for _, entry in ipairs(entries) do
-    data = data .. Buffer.encode_string(entry) .. '\0'  -- no data (assumes client has core/vanilla data already)
+    buffer:string(entry):boolean(false)  -- no data (assumes client has core/vanilla data already)
   end
-  return data
+  return buffer
 end
 
 local dimension_types = { "minecraft:overworld", "minecraft:overworld_caves", "minecraft:the_end", "minecraft:the_nether" }

@@ -10,7 +10,7 @@
 local json = require 'lunajson'
 local copas_timer = require 'copas.timer'
 
-local Buffer = require "buffer"
+local ReceiveBuffer = require "ReceiveBuffer"
 local SendBuffer = require 'SendBuffer'
 local log = require "log"
 local util = require "util"
@@ -61,7 +61,7 @@ end
 
 ---@class Connection
 ---@field sock LuaSocket
----@field buffer Buffer
+---@field buffer ReceiveBuffer
 ---@field state state
 ---@field server Server
 ---@field current_teleport_id integer
@@ -121,14 +121,29 @@ local function send_facing(yaw, pitch)
   return yaw, pitch
 end
 
+-- Sends a raw packet to the client (i.e. an already `concat`ed buffer).
+---@param con Connection
+---@param data string       The packet's data, including the packet id.
+local function send_raw(con, data)
+  con.sock:send(SendBuffer():varint(#data):raw(data):concat())
+end
 
 -- Sends a packet to the client.
 ---@param packet_id integer
----@param data string
-function Connection:send(packet_id, data)
-  data = Buffer.encode_varint(packet_id) .. data
-  data = Buffer.encode_varint(#data) .. data
-  self.sock:send(data)
+---@param buffer SendBuffer   The buffer's contents are not modified
+function Connection:send(packet_id, buffer)
+  send_raw(self, buffer:concat_and_prepend_varint(packet_id))
+end
+
+-- Sends a packet to all other connections that are "listening" to this connection (sending movement/pose actions to other players). <br>
+-- This avoids re-encoding the body of the packet for each player (and having to write this for loop all over the place).
+---@param packet_id integer
+---@param buffer SendBuffer   The buffer's contents are not modified
+function Connection:send_to_all_listeners(packet_id, buffer)
+  local data = buffer:concat_and_prepend_varint(packet_id)
+  for _, con in pairs(self.listening_connections) do
+    send_raw(con, data)
+  end
 end
 
 -- Immediately closes this connection; does not send any information to the client.
@@ -149,9 +164,9 @@ function Connection:disconnect(message)
     message = { text = tostring(message) }
   end
   if self.state == STATE_LOGIN then
-    self:send(LOGIN_clientbound.login_disconnect, Buffer.encode_string(json.encode(message)))
+    self:send(LOGIN_clientbound.login_disconnect, SendBuffer():string(json.encode(message)))
   elseif self.state == STATE_PLAY then
-    self:send(PLAY_clientbound.disconnect, NBT.compound(message))
+    self:send(PLAY_clientbound.disconnect, SendBuffer():raw(NBT.compound(message)))
   end
   self:close()
 end
@@ -165,17 +180,7 @@ function Connection:keepalive()
     return
   end
   self.keepalive_id = math.random(math.mininteger, math.maxinteger)  -- lua integers are the same range as a Long
-  self:send(PLAY_clientbound.keep_alive, Buffer.encode_long(self.keepalive_id))
-end
-
--- Sends a packet to all other connections that are "listening" to this connection (sending movement/pose actions to other players). <br>
--- This avoids re-encoding the body of the packet for each player (and having to write this for loop all over the place).
----@param packet_id integer
----@param data string
-function Connection:send_to_all_listeners(packet_id, data)
-  for _, con in pairs(self.listening_connections) do
-    con:send(packet_id, data)
-  end
+  self:send(PLAY_clientbound.keep_alive, SendBuffer():long(self.keepalive_id))
 end
 
 -- Sends a full "Chunk Data and Update Light" packet to the client.
@@ -183,32 +188,31 @@ end
 ---@param chunk_z integer
 ---@param chunk Chunk      The chunk data
 function Connection:send_chunk(chunk_x, chunk_z, chunk)
-  local buffer = SendBuffer.new()
+  local buffer = SendBuffer()
   local chunk_data = chunk:get_data()
 
-  buffer:write_int(chunk_x)
-  buffer:write_int(chunk_z)
-  buffer:write_raw(NBT.compound{})  -- empty heightmaps
+  buffer:int(chunk_x)
+  buffer:int(chunk_z)
+  buffer:raw(NBT.compound{})  -- empty heightmaps
 
-  buffer:write_varint(#chunk_data)  -- chunk data size
-  buffer:write_raw(chunk_data)      -- chunk data
+  buffer:raw(chunk_data)      -- chunk data (includes size)
 
-  buffer:write_varint(0)            -- # of block entites
-  buffer:write_varint(0)            -- sky light mask (BitSet of length 0)
-  buffer:write_varint(0)            -- block light mask (BitSet of length 0)
-  buffer:write_varint(0)            -- empty sky light mask (BitSet of length 0)
-  buffer:write_varint(0)            -- empty sky light mask (BitSet of length 0)
-  buffer:write_varint(0)            -- sky light array count (empty array)
-  buffer:write_varint(0)            -- block light array count (empty array)
+  buffer:varint(0)            -- # of block entites
+  buffer:varint(0)            -- sky light mask (BitSet of length 0)
+  buffer:varint(0)            -- block light mask (BitSet of length 0)
+  buffer:varint(0)            -- empty sky light mask (BitSet of length 0)
+  buffer:varint(0)            -- empty sky light mask (BitSet of length 0)
+  buffer:varint(0)            -- sky light array count (empty array)
+  buffer:varint(0)            -- block light array count (empty array)
 
-  self:send(PLAY_clientbound.level_chunk_with_light, buffer:concat())
+  self:send(PLAY_clientbound.level_chunk_with_light, buffer)
 end
 
 -- Sends a Block Update packet to the client.
 ---@param pos blockpos
 ---@param state integer   The block state ID to set at the position
 function Connection:send_block(pos, state)
-  self:send(PLAY_clientbound.block_update, Buffer.encode_position(pos) .. Buffer.encode_varint(state))
+  self:send(PLAY_clientbound.block_update, SendBuffer():position(pos):varint(state))
 end
 
 -- Sends a chat message to the client.
@@ -220,33 +224,34 @@ function Connection:send_chat_message(type, sender, content, target)
   log("sending chat message of type %q from %q with target %q and content %q", type, sender, target, content)
   --TODO: resolving of registry types for chat_type.
   -- also chat type here appears to be indexed starting at 1? instead of 0 like other registries
-  local packet = NBT.string(content) .. Buffer.encode_varint(1) .. NBT.string(sender)
+  local buffer = SendBuffer():raw(NBT.string(content)):varint(1):raw(NBT.string(sender))
   if target then
-    packet = packet .. '\1' .. NBT.string(target)
+    buffer:boolean(true):raw(NBT.string(target))
   else
-    packet = packet .. '\0'
+    buffer:boolean(false)  -- has target name
   end
-  self:send(PLAY_clientbound.disguised_chat, packet)
+  self:send(PLAY_clientbound.disguised_chat, buffer)
 end
 
 -- Sends a system message to the client.
 ---@param message string
 function Connection:send_system_message(message)
-  self:send(PLAY_clientbound.system_chat, NBT.string(message) .. '\0')  -- 0 is not overlay/actionbar
+  self:send(PLAY_clientbound.system_chat, SendBuffer():raw(NBT.string(message)):boolean(false))  -- false is not overlay/actionbar
 end
 
 -- Informs the client that the specified other players exist
 ---@param players Player[]
 function Connection:add_players(players)
   -- 0x01 Add Player | 0x08 Update Listed, # of players in the array
-  local players_data = '\x09' .. Buffer.encode_varint(#players)
+  local buffer = SendBuffer():byte(0x09):varint(#players)
   for _, player in pairs(players) do
     -- uuid, username, 0 properties, is listed
-    players_data = players_data .. player.uuid .. Buffer.encode_string(player.username) .. Buffer.encode_varint(0) .. '\1'
+    buffer:raw(player.uuid):string(player.username):varint(0):boolean(true)
+    --players_data = players_data .. player.uuid .. ReceiveBuffer.encode_string(player.username) .. ReceiveBuffer.encode_varint(0) .. '\1'
     -- start listening to the player's connection
     player.connection:add_listener(self)
   end
-  self:send(PLAY_clientbound.player_info_update, players_data)
+  self:send(PLAY_clientbound.player_info_update, buffer)
 end
 
 -- Informs the client that the specified entity spawned
@@ -254,10 +259,10 @@ end
 function Connection:add_entity(entity)
   local type_id = registry.entity_types[entity.type]
   local yaw, pitch = send_facing(entity.yaw, entity.pitch)
-  self:send(PLAY_clientbound.add_entity, Buffer.encode_varint(entity.id) .. entity.uuid .. Buffer.encode_varint(type_id)
-    .. string.pack(">dddBBB", entity.position.x, entity.position.y, entity.position.z, pitch, yaw, yaw)  -- xyz, pitch yaw head_yaw
-    .. Buffer.encode_varint(0)                                                                           -- "data" (depends on entity type)
-    .. string.pack(">i2i2i2", 0, 0, 0)
+  self:send(PLAY_clientbound.add_entity, SendBuffer():varint(entity.id):raw(entity.uuid):varint(type_id)
+    :pack(">dddBBB", entity.position.x, entity.position.y, entity.position.z, pitch, yaw, yaw)  -- xyz, pitch yaw head_yaw
+    :varint(0)                                                                                  -- "data" (depends on entity type)
+    :pack(">i2i2i2", 0, 0, 0)                                                                   -- velocity (as shorts)
   )
 end
 
@@ -265,32 +270,32 @@ end
 ---@param entity Entity
 function Connection:send_move_entity(entity)
   local yaw, pitch = send_facing(entity.yaw, entity.pitch)
-  self:send(PLAY_clientbound.teleport_entity, Buffer.encode_varint(entity.id) .. string.pack(">dddBBB",
+  self:send(PLAY_clientbound.teleport_entity, SendBuffer():varint(entity.id):pack(">dddBBB",
     entity.position.x, entity.position.y, entity.position.z, yaw, pitch, 1  -- 1 is on ground
   ))
-  self:send(PLAY_clientbound.rotate_head, Buffer.encode_varint(entity.id) .. string.char(yaw))
+  self:send(PLAY_clientbound.rotate_head, SendBuffer():varint(entity.id):byte(yaw))
 end
 
 -- Informs the client that the specified other players no longer exist
 ---@param players Player[]
 function Connection:remove_players(players)
-  local players_data = Buffer.encode_varint(#players)
+  local buffer = SendBuffer():varint(#players)
   for _, player in pairs(players) do
-    players_data = players_data .. player.uuid
+    buffer:raw(player.uuid)
     -- stop listening to the player's connection
     player.connection:remove_listener(self)
   end
-  self:send(PLAY_clientbound.player_info_remove, players_data)
+  self:send(PLAY_clientbound.player_info_remove, buffer)
 end
 
 -- Informs the client that the specified entities no longer exist
 ---@param entities Entity[]
 function Connection:remove_entities(entities)
-  local entities_data = Buffer.encode_varint(#entities)
+  local buffer = SendBuffer():varint(#entities)
   for _, entity in pairs(entities) do
-    entities_data = entities_data .. Buffer.encode_varint(entity.id)
+    buffer:varint(entity.id)
   end
-  self:send(PLAY_clientbound.remove_entities, entities_data)
+  self:send(PLAY_clientbound.remove_entities, buffer)
 end
 
 -- Synchronizes the Player's position with the client. Handles the "Teleport ID" stuff with the accept teleport packet.
@@ -299,7 +304,7 @@ function Connection:synchronize_position()
   self.current_teleport_acknowledged = false
   local pos = self.player.position
   local yaw, pitch = self.player.yaw, self.player.pitch  -- as floats, not 1/256ths of rotation
-  self:send(PLAY_clientbound.player_position, string.pack(">dddffb", pos.x, pos.y, pos.z, yaw, pitch, 0) .. Buffer.encode_varint(self.current_teleport_id))
+  self:send(PLAY_clientbound.player_position, SendBuffer():pack(">dddffb", pos.x, pos.y, pos.z, yaw, pitch, 0):varint(self.current_teleport_id))
 end
 
 -- Indicates that the specified connection is listening to this connection's movement/pose actions.
@@ -338,10 +343,10 @@ end
 function Connection:handle_packet_handshake(packet_id)
   if packet_id == HANDSHAKE_serverbound.intention then
     -- Begin connection (corresponds to "Connecting to the server..." on the client connection screen
-    local protocol_id = self.buffer:read_varint()
-    local server_addr = self.buffer:read_string()
-    local server_port = self.buffer:read_short()
-    local next_state = self.buffer:read_varint()
+    local protocol_id = self.buffer:varint()
+    local server_addr = self.buffer:string()
+    local server_port = self.buffer:short()
+    local next_state = self.buffer:varint()
     log("handshake from protocol %i to %s:%i, next state: %i", protocol_id, server_addr, server_port, next_state)
     if next_state == 1 then
       self:set_state(STATE_STATUS)
@@ -356,30 +361,29 @@ function Connection:handle_packet_handshake(packet_id)
   end
 end
 
-local status_response = Buffer.encode_string(
-  json.encode{
-    version = { name = "1.21", protocol = 767 },
-    players = { max = 0, online = 2,
-      sample = {
-        { name = "Penguin_Spy", id = "dfbd911d-9775-495e-aac3-efe339db7efd" }
-      }
-    },
-    description = { text = "woah haiii :3" },
-    enforcesSecureChat = false,
-    previewsChat = false
-  }
-)
+local status_response = json.encode{
+  version = { name = "1.21", protocol = 767 },
+  players = { max = 0, online = 2,
+    sample = {
+      { name = "Penguin_Spy", id = "dfbd911d-9775-495e-aac3-efe339db7efd" }
+    }
+  },
+  description = { text = "woah haiii :3" },
+  enforcesSecureChat = false,
+  previewsChat = false
+}
+
 -- Handles a single packet in the status state
 ---@param packet_id integer
 function Connection:handle_packet_status(packet_id)
   if packet_id == STATUS_serverbound.status_request then
     log("status request")
-    self:send(STATUS_clientbound.status_response, status_response)
+    self:send(STATUS_clientbound.status_response, SendBuffer():string(status_response))
 
     --
   elseif packet_id == STATUS_serverbound.ping_request then
     log("ping request with data %s", self.buffer:dump(8))
-    self:send(STATUS_clientbound.pong_response, self.buffer:read(8))
+    self:send(STATUS_clientbound.pong_response, SendBuffer():raw(self.buffer:read(8)))
 
     --
   else
@@ -393,7 +397,7 @@ end
 function Connection:handle_packet_login(packet_id)
   -- only valid to receive BEFORE we've sent the game_profile packet
   if packet_id == LOGIN_serverbound.hello and self.state == STATE_LOGIN then
-    local username = self.buffer:read_string()
+    local username = self.buffer:string()
     local uuid_str = self.buffer:dump(16)
     self.buffer:read_to_end()  -- discard client-sent UUID
     local uuid = util.new_UUID()
@@ -409,7 +413,7 @@ function Connection:handle_packet_login(packet_id)
     self.player = Player._new(username, uuid, self)
 
     -- Send login success (corresponds to "Joining world..." on the client connection screen)
-    self:send(LOGIN_clientbound.game_profile, uuid .. Buffer.encode_string(username) .. Buffer.encode_varint(0) .. '\1')  -- last byte is strict error handling
+    self:send(LOGIN_clientbound.game_profile, SendBuffer():raw(uuid):string(username):varint(0):byte(1))  -- last byte is strict error handling
     self:set_state(STATE_LOGIN_WAIT_ACK)
 
     -- only valid to receive AFTER we've sent the game_profile packet
@@ -417,15 +421,15 @@ function Connection:handle_packet_login(packet_id)
     log("login ack'd")
     self:set_state(STATE_CONFIGURATION)
     -- send server brand
-    self:send(CONFIGURATION_clientbound.custom_payload, Buffer.encode_string("minecraft:brand") .. Buffer.encode_string("quasar"))
+    self:send(CONFIGURATION_clientbound.custom_payload, SendBuffer():string("minecraft:brand"):string("quasar"))
     -- super cool extra data in the new "protocol error report"
-    self:send(CONFIGURATION_clientbound.custom_report_details, Buffer.encode_varint(1) .. Buffer.encode_string("quasar server") .. Buffer.encode_string("https://github.com/Penguin-Spy/quasar"))
+    self:send(CONFIGURATION_clientbound.custom_report_details, SendBuffer():varint(1):string("quasar server"):string("https://github.com/Penguin-Spy/quasar"))
     -- bug report link (just testing this, it seems neat. should make this available to ppl using the library)
-    self:send(CONFIGURATION_clientbound.server_links, Buffer.encode_varint(1) .. '\1' .. Buffer.encode_varint(0) .. Buffer.encode_string("https://github.com/Penguin-Spy/quasar/issues"))
+    self:send(CONFIGURATION_clientbound.server_links, SendBuffer():varint(1):byte(1):varint(0):string("https://github.com/Penguin-Spy/quasar/issues"))
     -- send feature flags packet (enable vanilla features (not required for registry sync/client to connect, but probably important))
-    self:send(CONFIGURATION_clientbound.update_enabled_features, Buffer.encode_varint(1) .. Buffer.encode_string("minecraft:vanilla"))
+    self:send(CONFIGURATION_clientbound.update_enabled_features, SendBuffer():varint(1):string("minecraft:vanilla"))
     -- start datapack negotiation (official server declares the "minecraft:core" datapack with version "1.21")
-    self:send(CONFIGURATION_clientbound.select_known_packs, Buffer.encode_varint(1) .. Buffer.encode_string("minecraft") .. Buffer.encode_string("core") .. Buffer.encode_string("1.21"))
+    self:send(CONFIGURATION_clientbound.select_known_packs, SendBuffer():varint(1):string("minecraft"):string("core"):string("1.21"))
 
     --
   else
@@ -438,13 +442,13 @@ end
 function Connection:handle_packet_configuration(packet_id)
   -- only valid to receive BEFORE we've sent the finish_configuration packet
   if packet_id == CONFIGURATION_serverbound.select_known_packs and self.state == STATE_CONFIGURATION then
-    local client_known_pack_count = self.buffer:read_varint()
+    local client_known_pack_count = self.buffer:varint()
     log("serverbound known packs (known on the client): %i", client_known_pack_count)
     -- TODO: validate that the client does actually know about minecraft:core with version 1.21
     for i = 1, client_known_pack_count do
-      local pack_namespace = self.buffer:read_string()
-      local pack_id = self.buffer:read_string()
-      local pack_version = self.buffer:read_string()
+      local pack_namespace = self.buffer:string()
+      local pack_id = self.buffer:string()
+      local pack_version = self.buffer:string()
       log("  client knows pack %s:%s of version %s", pack_namespace, pack_id, pack_version)
     end
 
@@ -462,7 +466,7 @@ function Connection:handle_packet_configuration(packet_id)
     self:send(CONFIGURATION_clientbound.registry_data, regs.enchantment)
     self:send(CONFIGURATION_clientbound.registry_data, regs.jukebox_song)
 
-    self:send(CONFIGURATION_clientbound.finish_configuration, "")  -- then tell client we're finished with configuration, u can ack when you're done sending stuff
+    self:send(CONFIGURATION_clientbound.finish_configuration, SendBuffer())  -- then tell client we're finished with configuration, u can ack when you're done sending stuff
     self:set_state(STATE_CONFIGURATION_WAIT_ACK)
 
     --
@@ -472,7 +476,7 @@ function Connection:handle_packet_configuration(packet_id)
 
     --
   elseif packet_id == CONFIGURATION_serverbound.custom_payload then
-    local channel = self.buffer:read_string()
+    local channel = self.buffer:string()
     local data = self.buffer:read_to_end()
     log("plugin message (configuration) on channel '%s' with data: '%s'", channel, data)
 
@@ -497,18 +501,18 @@ function Connection:handle_packet_configuration(packet_id)
     local dim = player.dimension
 
     -- send login (Corresponds to "Loading terrain..." on the client connection screen)
-    self:send(PLAY_clientbound.login, Buffer.encode_int(0) .. '\0'  -- entity id, is hardcore
-      .. Buffer.encode_varint(0)                                    -- dimensions (appears to be ignored?)
-      .. Buffer.encode_varint(0)                                    -- "max players" (unused)
-      .. Buffer.encode_varint(10)                                   -- view dist
-      .. Buffer.encode_varint(5)                                    -- sim dist
-      .. '\0\1\0'                                                   -- reduced debug, respawn screen, limited crafting
-      .. Buffer.encode_varint(0)                                    -- starting dim type (registry id)
-      .. Buffer.encode_string(dim.identifier)                       -- starting dim name
-      .. Buffer.encode_long(0)                                      -- hashed seeed
-      .. '\1\255\0\0\0'                                             -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
-      .. Buffer.encode_varint(0)                                    -- portal cooldown (unknown use)
-      .. '\1'                                                       -- enforces secure chat (causes giant warning toast to show up if false, seemingly no other effects?)
+    self:send(PLAY_clientbound.login, SendBuffer()
+      :int(0):boolean(false)                                           -- entity id, is hardcore
+      :varint(0)                                                       -- dimensions (appears to be ignored?)
+      :varint(0)                                                       -- "max players" (unused)
+      :varint(10):varint(5)                                            -- view dist, sim dist
+      :boolean(false):boolean(true):boolean(false)                     -- reduced debug, respawn screen, limited crafting
+      :varint(0)                                                       -- starting dim type (registry id)
+      :string(dim.identifier)                                          -- starting dim name
+      :long(0)                                                         -- hashed seeed
+      :byte(1):byte(255):boolean(false):boolean(false):boolean(false)  -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
+      :varint(0)                                                       -- portal cooldown (unknown use)
+      :boolean(true)                                                   -- enforces secure chat (causes giant warning toast to show up if false, seemingly no other effects?)
     )
     -- spawns player in dimension and loads entities
     dim:_add_player(player)
@@ -519,7 +523,7 @@ function Connection:handle_packet_configuration(packet_id)
     -- invulnerable (unknown effect), flying, allow flying (allow toggling flight), creative mode/instant break (unknown effect), fly speed, fov modifier
     --self:send(PLAY_clientbound.player_abilities, string.pack(">bff", 0x01 | 0x02 | 0x04 | 0x08, 0.05, 0.1))
 
-    self:send(PLAY_clientbound.game_event, "\13\0\0\0\0")  -- game event 13 (start waiting for chunks), float param of always 0
+    self:send(PLAY_clientbound.game_event, SendBuffer():byte(13):int(0))  -- game event 13 (start waiting for chunks), float param of always 0 (4 bytes)
 
     -- send chunks (this closes the connection screen and shows the player in the world)
     for x = -4, 4 do
@@ -544,7 +548,7 @@ end
 ---@param packet_id integer
 function Connection:handle_packet_play(packet_id)
   if packet_id == PLAY_serverbound.keep_alive then
-    local keepalive_id = self.buffer:read_long()
+    local keepalive_id = self.buffer:long()
     if keepalive_id == self.keepalive_id then
       self.keepalive_received = true
     else
@@ -552,7 +556,7 @@ function Connection:handle_packet_play(packet_id)
     end
     --
   elseif packet_id == PLAY_serverbound.accept_teleportation then
-    local teleport_id = self.buffer:read_varint()
+    local teleport_id = self.buffer:varint()
     if teleport_id == self.current_teleport_id then
       log("confirm teleport #%i", teleport_id)
       self.current_teleport_acknowledged = true
@@ -562,11 +566,10 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.chat then
-    local message = self.buffer:read_string()
-    local timestamp = self.buffer:dump(8)
-    local salt = self.buffer:dump(8)
-    self.buffer:read(16)  -- discard what we just dumped
-    local has_signature = self.buffer:byte()
+    local message = self.buffer:string()
+    local timestamp = self.buffer:dump(8); self.buffer:read(8)
+    local salt = self.buffer:dump(8); self.buffer:read(8)  -- discard what we just dumped
+    local has_signature = self.buffer:boolean()
     self.buffer:read_to_end()
     log("chat msg from '%s' at %s salt %s signed %q: %s", self.player.username, timestamp, salt, has_signature, message)
 
@@ -578,7 +581,7 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.chat_command then
-    local command = self.buffer:read_string()
+    local command = self.buffer:string()
     if #command > 32767 then
       error("received too long command")
     end
@@ -592,7 +595,7 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.custom_payload then
-    local channel = self.buffer:read_string()
+    local channel = self.buffer:string()
     local data = self.buffer:read_to_end()
     log("plugin message (play) on channel '%s' with data: '%s'", channel, data)
 
@@ -602,8 +605,8 @@ function Connection:handle_packet_play(packet_id)
       self.buffer:read_to_end()
       return
     end
-    self.player.position:set(self.buffer:read_double(), self.buffer:read_double(), self.buffer:read_double())
-    self.player.on_ground = self.buffer:byte() ~= 0
+    self.player.position:set(self.buffer:double(), self.buffer:double(), self.buffer:double())
+    self.player.on_ground = self.buffer:boolean()
     for _, con in pairs(self.listening_connections) do
       con:send_move_entity(self.player)
     end
@@ -614,9 +617,9 @@ function Connection:handle_packet_play(packet_id)
       self.buffer:read_to_end()
       return
     end
-    self.player.position:set(self.buffer:read_double(), self.buffer:read_double(), self.buffer:read_double())
-    self.player.yaw, self.player.pitch = receive_facing(self.buffer:read_float(), self.buffer:read_float())
-    self.player.on_ground = self.buffer:byte() ~= 0
+    self.player.position:set(self.buffer:double(), self.buffer:double(), self.buffer:double())
+    self.player.yaw, self.player.pitch = receive_facing(self.buffer:float(), self.buffer:float())
+    self.player.on_ground = self.buffer:boolean()
     for _, con in pairs(self.listening_connections) do
       con:send_move_entity(self.player)
     end
@@ -627,15 +630,15 @@ function Connection:handle_packet_play(packet_id)
       self.buffer:read_to_end()
       return
     end
-    self.player.yaw, self.player.pitch = receive_facing(self.buffer:read_float(), self.buffer:read_float())
-    self.player.on_ground = self.buffer:byte() ~= 0
+    self.player.yaw, self.player.pitch = receive_facing(self.buffer:float(), self.buffer:float())
+    self.player.on_ground = self.buffer:boolean()
     for _, con in pairs(self.listening_connections) do
       con:send_move_entity(self.player)
     end
 
     --
   elseif packet_id == PLAY_serverbound.move_player_status_only then
-    log("player on ground: %q", self.buffer:byte() ~= 0)
+    log("player on ground: %q", self.buffer:boolean())
 
     --
   elseif packet_id == PLAY_serverbound.player_abilities then
@@ -644,8 +647,8 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.player_command then
-    self.buffer:read_varint()  -- always the player's entity ID
-    local action = self.buffer:read_varint()
+    self.buffer:varint()       -- always the player's entity ID
+    local action = self.buffer:varint()
     self.buffer:read_to_end()  -- VarInt horse jump strength, or 0 if not jumping
     if action == 0 then
       self.player.sneaking = true
@@ -656,28 +659,28 @@ function Connection:handle_packet_play(packet_id)
     elseif action == 4 then
       self.player.sprinting = false
     end
-    self:send_to_all_listeners(PLAY_clientbound.set_entity_data, Buffer.encode_varint(self.player.id)
+    self:send_to_all_listeners(PLAY_clientbound.set_entity_data, SendBuffer():varint(self.player.id)
       -- sneaking causes the nametag to become fainter and hidden behind walls, sprinting causes the running particles to appear
-      .. '\0' .. Buffer.encode_varint(0) .. string.char((self.player.sneaking and 0x02 or 0) | (self.player.sprinting and 0x08 or 0))
+      :byte(0):varint(0):byte((self.player.sneaking and 0x02 or 0) | (self.player.sprinting and 0x08 or 0))
       -- sets the sneaking/standing pose
-      .. '\6' .. Buffer.encode_varint(21) .. Buffer.encode_varint(self.player.sneaking and 5 or 0)
-      .. '\xff')
+      :byte(6):varint(21):varint(self.player.sneaking and 5 or 0)
+      :byte(0xff))
 
     --
   elseif packet_id == PLAY_serverbound.set_carried_item then
-    local slot = self.buffer:read_short()
+    local slot = self.buffer:short()
     log("select slot %i", slot)
     self.player:on_select_hotbar_slot(slot)
 
     --
   elseif packet_id == PLAY_serverbound.set_creative_mode_slot then
-    local slot = self.buffer:read_short()
+    local slot = self.buffer:short()
 
-    local item_count = self.buffer:read_varint()
+    local item_count = self.buffer:varint()
     if item_count > 0 then
-      local item_id = self.buffer:read_varint()
-      local components_to_add_count = self.buffer:read_varint()
-      local components_to_remove_count = self.buffer:read_varint()
+      local item_id = self.buffer:varint()
+      local components_to_add_count = self.buffer:varint()
+      local components_to_remove_count = self.buffer:varint()
       log("set slot %i to item #%i x%i (+%i,-%i)", slot, item_id, item_count, components_to_add_count, components_to_remove_count)
       -- TODO: read component data, construct actual item object
       self.buffer:read_to_end()
@@ -693,57 +696,57 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.seen_advancements then
-    local action, tab_id = self.buffer:read_varint()
+    local action, tab_id = self.buffer:varint()
     if action == 0 then
-      tab_id = self.buffer:read_string()
+      tab_id = self.buffer:string()
     end
     log("seen advancements: action %i, tab %s", action, tab_id or "n/a")
 
     --
   elseif packet_id == PLAY_serverbound.player_action then
-    local action = self.buffer:read_varint()
-    local pos = self.buffer:read_position()
+    local action = self.buffer:varint()
+    local pos = self.buffer:position()
     local face = self.buffer:byte()
-    local seq = self.buffer:read_varint()
+    local seq = self.buffer:varint()
     log("player action: action %i, pos (%i,%i,%i), face %i, seq %i", action, pos.x, pos.y, pos.z, face, seq)
 
     self.player.dimension:on_break_block(self.player, pos)
     -- acknowledge the block breaking so the client shows the block state the server says instead of its predicted state
-    self:send(PLAY_clientbound.block_changed_ack, Buffer.encode_varint(seq))
+    self:send(PLAY_clientbound.block_changed_ack, SendBuffer():varint(seq))
 
     --
   elseif packet_id == PLAY_serverbound.swing then
-    local arm_animation = self.buffer:read_varint() == 0 and '\0' or '\3'  -- arm 0 is animation 0, arm 1 (offhand) is animation 3
-    self:send_to_all_listeners(PLAY_clientbound.animate, Buffer.encode_varint(self.player.id) .. arm_animation)
+    local arm_animation = self.buffer:varint() == 0 and 0 or 3  -- arm 0 is animation 0, arm 1 (offhand) is animation 3
+    self:send_to_all_listeners(PLAY_clientbound.animate, SendBuffer():varint(self.player.id):byte(arm_animation))
 
     --
   elseif packet_id == PLAY_serverbound.use_item_on then
-    local hand = self.buffer:read_varint()
-    local pos = self.buffer:read_position()
+    local hand = self.buffer:varint()
+    local pos = self.buffer:position()
     local face = self.buffer:byte()
-    local cursor_x = self.buffer:read_float()
-    local cursor_y = self.buffer:read_float()
-    local cursor_z = self.buffer:read_float()
-    local inside_block = self.buffer:byte() == 1
-    local seq = self.buffer:read_varint()
+    local cursor_x = self.buffer:float()
+    local cursor_y = self.buffer:float()
+    local cursor_z = self.buffer:float()
+    local inside_block = self.buffer:boolean()
+    local seq = self.buffer:varint()
 
     local slot = hand == 1 and 45 or self.player.selected_slot + 36
     log("use item of hand %i (slot %i) on block (%i,%i,%i) face %i at (%f,%f,%f) in block: %q", hand, slot, pos.x, pos.y, pos.z, face, cursor_x, cursor_y, cursor_z, inside_block)
     self.player.dimension:on_use_item_on_block(self.player, slot, pos, face, { x = cursor_x, y = cursor_y, z = cursor_z }, inside_block)
     -- acknowledge the item use
-    self:send(PLAY_clientbound.block_changed_ack, Buffer.encode_varint(seq))
+    self:send(PLAY_clientbound.block_changed_ack, SendBuffer():varint(seq))
 
     --
   elseif packet_id == PLAY_serverbound.use_item then
-    local hand = self.buffer:read_varint()
-    local seq = self.buffer:read_varint()
-    local yaw = self.buffer:read_float()
-    local pitch = self.buffer:read_float()
+    local hand = self.buffer:varint()
+    local seq = self.buffer:varint()
+    local yaw = self.buffer:float()
+    local pitch = self.buffer:float()
     local slot = hand == 1 and 45 or self.player.selected_slot + 36
     log("use item of hand %i (slot %i) facing %f,%f", hand, slot, yaw, pitch)
     self.player.dimension:on_use_item(self.player, slot, yaw, pitch)
     -- acknowledge the item use
-    self:send(PLAY_clientbound.block_changed_ack, Buffer.encode_varint(seq))
+    self:send(PLAY_clientbound.block_changed_ack, SendBuffer():varint(seq))
 
     --
   else
@@ -752,11 +755,11 @@ function Connection:handle_packet_play(packet_id)
 end
 
 function Connection:handle_legacy_ping()
-  self.buffer:read(27)                          -- discard irrelevant stuff
+  self.buffer:read(27)                     -- discard irrelevant stuff
   local protocol_id = self.buffer:byte()
-  local str_len = self.buffer:read_short() * 2  -- UTF-16BE
+  local str_len = self.buffer:short() * 2  -- UTF-16BE
   local server_addr = self.buffer:read(str_len)
-  local server_port = self.buffer:read_int()
+  local server_port = self.buffer:int()
   log("legacy ping from protocol %i addr %s port %i", protocol_id, server_addr, server_port)
   self.sock:send("\xFF\x00\029\x00\xA7\x001\x00\x00\x001\x002\x007\x00\x00\x001\x00.\x002\x001\x00\x00\x00w\x00o\x00a\x00h\x00 \x00h\x00a\x00i\x00i\x00i\x00 \x00:\x003\x00\x00\x000\x00\x00\x000")
   self:close()
@@ -777,7 +780,7 @@ function Connection:loop()
           self:handle_legacy_ping()
         elseif length then
           self.buffer:set_end(length)
-          success, packet_err = xpcall(self.handle_packet, debug.traceback, self, self.buffer:read_varint())
+          success, packet_err = xpcall(self.handle_packet, debug.traceback, self, self.buffer:varint())
           if not success then
             err = packet_err
           end
@@ -827,7 +830,7 @@ local function new(sock, server)
   ---@type Connection
   local self = {
     sock = sock,
-    buffer = Buffer.new(),
+    buffer = ReceiveBuffer(),
     state = STATE_HANDSHAKE,
     server = server,
     current_teleport_id = 0,
