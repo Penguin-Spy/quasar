@@ -16,7 +16,7 @@ local registries_data = util.read_json("registries.json")
 
 --
 ---@param registry_id identifier
----@return table<identifier, number>|table<number, identifier>
+---@return {[identifier]: number}|{[number]: identifier}
 local function registry_to_2_way_map(registry_id)
   local reg = registries_data[registry_id].entries
   local map = {}
@@ -30,7 +30,7 @@ end
 ---@alias registry.entity_type identifier
 ---@alias registry.item identifier
 
-Registry.entity_types = registry_to_2_way_map("minecraft:entity_type")  --[[@as table<registry.entity_type, number>|table<number, registry.entity_type>]]
+Registry.entity_types = registry_to_2_way_map("minecraft:entity_type")  --[[@as {[registry.entity_type]: number}|{[number]: registry.entity_type}]]
 Registry.items = registry_to_2_way_map("minecraft:item")
 
 -- in registries.json
@@ -61,6 +61,18 @@ local function generate_registry_for_network(identifier, entries)
   end
   return buffer
 end
+
+---@param registry {[integer]: string}
+---@return {[integer]: string}|{[string]: integer}
+local function registry_table_to_2_way_map(registry)
+  local map = {}
+  for i, entry in ipairs(registry) do
+    map[i] = entry
+    map[entry] = i
+  end
+  return map
+end
+
 
 local dimension_types = { "minecraft:overworld", "minecraft:overworld_caves", "minecraft:the_end", "minecraft:the_nether" }
 
@@ -242,5 +254,7 @@ Registry.network_data = {
   enchantment = generate_registry_for_network("minecraft:enchantment", encahntments),
   jukebox_song = generate_registry_for_network("minecraft:jukebox_song", jukebox_songs)
 }
+
+Registry.dimension_type = registry_table_to_2_way_map(dimension_types)
 
 return Registry

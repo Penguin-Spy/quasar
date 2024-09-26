@@ -19,6 +19,8 @@ local Vector3 = require "Vector3"
 ---@field on_ground boolean     True if the client thinks it's on the ground
 ---@field sneaking boolean      True if the client intends to be sneaking
 ---@field sprinting boolean     True if the client intends to be sprinting
+---@field block_position Vector3
+---@field chunk_position Vector3
 local Player = {}
 
 --
@@ -100,6 +102,15 @@ function Player:remove_entities(entities)
   self.connection:remove_entities(entities)
 end
 
+-- Transfers the player to the specified dimension
+---@param new_dimension Dimension
+function Player:transfer_dimension(new_dimension)
+  self.dimension:_remove_player(self)
+  self.dimension = new_dimension
+  self.connection:respawn(3)
+  self.dimension:_add_player(self)
+end
+
 -- Internal method
 ---@param username string
 ---@param uuid string       The player's UUID in binary form.
@@ -121,7 +132,9 @@ function Player._new(username, uuid, con)
     connection = con,
     on_ground = false,
     sneaking = false,
-    sprinting = false
+    sprinting = false,
+    block_position = Vector3.new(),
+    chunk_position = Vector3.new()
   }
   setmetatable(self, { __index = Player })
   return self

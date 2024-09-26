@@ -16,8 +16,10 @@ local Chunk = require 'chunk'
 
 ---@class Dimension
 ---@field timer table?  Copas timer for dimension ticking
----@field identifier identifier
----@field chunks Chunk[][]
+---@field identifier identifier The unique namespaced identifier of this dimension
+---@field type identifier       The identifier of this dimension's type
+---@field chunks {[integer]: {[integer]: Chunk }}
+---@field view_distance integer Radius in chunks; the area where the client accepts chunks is a square with sides `2r+7`, and chunks are rendered in a `2r+1` square.
 ---@field players Player[]      All players currently in this Dimension
 ---@field entities Entity[]
 ---@field next_entity_id number Starts at 1
@@ -88,6 +90,12 @@ end
 ---@param player Player
 function Dimension:on_player_joined(player)
   player.position:copy(self.spawnpoint)
+end
+
+-- Called whenever a player in this Dimension moves to a different block position.
+---@param player Player
+function Dimension:on_player_changed_position(player)
+
 end
 
 -- Ran 20 times per second. Handles updating the position of entites.
@@ -188,6 +196,13 @@ function Dimension:_add_player(player)
       other_player:add_entity(player)
     end
   end
+
+  -- synchronize player position (do this first so the client doesn't default to (8.5,65,8.5) when chunks are sent)
+  player.connection:synchronize_position()
+
+  -- send chunks to the player
+  local pos = player.position
+  self:_on_player_changed_chunk(player, pos.x // 16, pos.y // 16, pos.z // 16, true)
 end
 
 -- Removes the player from this Dimension, despawning their player entity.
@@ -202,21 +217,75 @@ function Dimension:_remove_player(player)
   player.id = nil
 end
 
+
+local modf = math.modf
+-- Called whenever a player in this Dimension moves. <br>
+-- Note that this is called each time a movement packet is received, and not necessarily when the player's block position has changed. <br>
+-- Default behavior handles chunk loading
+---@param player Player
+function Dimension:_on_player_moved(player)
+  local pos, bpos = player.position, player.block_position
+  local bx, by, bz = modf(pos.x), modf(pos.y), modf(pos.z)
+
+  if bx ~= bpos.x or by ~= bpos.y or bz ~= bpos.z then
+    bpos:set(bx, by, bz)
+    self:on_player_changed_position(player)
+
+    local cx, cy, cz = pos.x // 16, pos.y // 16, pos.z // 16
+    local cpos = player.chunk_position
+    if cx ~= cpos.x or cy ~= cpos.y or cz ~= cpos.z then
+      self:_on_player_changed_chunk(player, cx, cy, cz)
+    end
+  end
+end
+
+-- Handles sending chunks to the client; you generally don't need to change this.
+---@param player Player
+---@param cx integer The new chunk x
+---@param cy integer The new chunk y
+---@param cz integer The new chunk z
+---@param load_all boolean? If true, all chunks in the view distance will be sent to the client (i.e. when first joining the dimension)
+function Dimension:_on_player_changed_chunk(player, cx, cy, cz, load_all)
+  local cpos = player.chunk_position
+  log("changed chunk to %i, %i, %i", cx, cy, cz)
+  player.connection:send_set_center_chunk(cx, cz)
+  local r = self.view_distance + 3  -- extra 3 chunks is from `2r+7`
+
+  for x = cx - r, cx + r do
+    for z = cz - r, cz + r do
+      if (x < (cpos.x - r)) or (x > (cpos.x + r))
+          or (z < (cpos.z - r)) or (z > (cpos.z + r)) or load_all then
+        if self.chunks[x] and self.chunks[x][z] then
+          log("sending new chunk at %i, %i", x, z)
+          player.connection:send_chunk(x, z, self:get_chunk(x, z, player))
+        else
+          log("would send new chunk at %i, %i but it's outside the world", x, z)
+        end
+      end
+    end
+  end
+
+  cpos:set(cx, cy, cz)
+end
+
 -- Creates a new Dimension. You should not call this function yourself, instead use `Server.create_dimension`!
 ---@see Server.create_dimension
 ---@param identifier identifier   The identifier for the dimension, e.g. `"minecraft:overworld"`<br>
+---@param dimension_type identifier?   The identifier of this dimension's type
 ---@return Dimension
-function Dimension._new(identifier)
+function Dimension._new(identifier, dimension_type)
   ---@type Dimension
   local self = {
     identifier = identifier,
+    type = dimension_type or "minecraft:overworld",
     chunks = {},
+    view_distance = 4,
     players = {},
     entities = {},
     next_entity_id = 1,
-    spawnpoint = Vector3.new(0, 66, 0)
+    spawnpoint = Vector3.new(1, 66, 1)
   }
-  for x = -4, 4 do
+  for x = -10, 10 do
     self.chunks[x] = {}
     for z = -4, 4 do
       self.chunks[x][z] = Chunk._new(24)

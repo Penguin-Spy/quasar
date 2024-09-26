@@ -20,6 +20,7 @@ local SendBuffer = {}
 ---@return string
 local function varint(value)
   local data = ""
+  value = value & 0xFFFFFFFF  -- basically overflow negative values into positive 32 bit unsigned values
   while true do
     local byte = value & 0x7F
     if value > 0x7F then

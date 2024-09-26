@@ -70,7 +70,7 @@ function Chunk._new(height)
     for j = 1, 16 * 16 do  -- array of 256 Longs (data_size_as_longs)
       if i <= 8 then
         -- each Long is a line of 16 blocks along the X axis
-        data[j] = j % 16 | (((j - 1) % 16) << 4)
+        data[j] = ((j % 16) > 1) and 0x0111111111111110 or 0x2000000000000002
       else
         data[j] = 0
       end

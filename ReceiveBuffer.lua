@@ -78,7 +78,11 @@ function ReceiveBuffer:try_read_varint()
     if not b then return end
     value = value + ((b & 0x7F) << i)
     if (b & 0x80) ~= 0x80 then
-      return value
+      if value >= (2 ^ 31) then  -- wrap back into 32 bit signed integer range
+        return value - (2 ^ 32)
+      else
+        return value
+      end
     end
   end
   error("too long or invalid VarInt")

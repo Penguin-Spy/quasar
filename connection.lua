@@ -14,7 +14,7 @@ local ReceiveBuffer = require "ReceiveBuffer"
 local SendBuffer = require 'SendBuffer'
 local log = require "log"
 local util = require "util"
-local registry = require "registry"
+local Registry = require "registry"
 local NBT = require "nbt"
 local Player = require "player"
 local Item = require "item"
@@ -122,10 +122,10 @@ local function send_facing(yaw, pitch)
 end
 
 -- Sends a raw packet to the client (i.e. an already `concat`ed buffer).
----@param con Connection
+---@param self Connection
 ---@param data string       The packet's data, including the packet id.
-local function send_raw(con, data)
-  con.sock:send(SendBuffer():varint(#data):raw(data):concat())
+local function send_raw(self, data)
+  self.sock:send(SendBuffer():varint(#data):raw(data):concat())
 end
 
 -- Sends a packet to the client.
@@ -257,7 +257,7 @@ end
 -- Informs the client that the specified entity spawned
 ---@param entity Entity
 function Connection:add_entity(entity)
-  local type_id = registry.entity_types[entity.type]
+  local type_id = Registry.entity_types[entity.type]
   local yaw, pitch = send_facing(entity.yaw, entity.pitch)
   self:send(PLAY_clientbound.add_entity, SendBuffer():varint(entity.id):raw(entity.uuid):varint(type_id)
     :pack(">dddBBB", entity.position.x, entity.position.y, entity.position.z, pitch, yaw, yaw)  -- xyz, pitch yaw head_yaw
@@ -317,6 +317,30 @@ end
 ---@param con Connection
 function Connection:remove_listener(con)
   util.remove_value(self.listening_connections, con)
+end
+
+-- Respawns the player, used both when they are dead to respawn them, as well as when changing dimensions (the dimension must be changed before calling this function).
+---@param data_kept integer  Bit mask. 0x01: Keep attributes, 0x02: Keep metadata.
+function Connection:respawn(data_kept)
+  local dim = self.player.dimension
+  self:send(PLAY_clientbound.respawn, SendBuffer()
+    :varint(Registry.dimension_type[dim.type])                       -- starting dim type (registry id)
+    :string(dim.identifier)                                          -- starting dim name
+    :long(0)                                                         -- hashed seeed
+    :byte(1):byte(255):boolean(false):boolean(false):boolean(false)  -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
+    :varint(0)                                                       -- portal cooldown (unknown use)
+    :byte(data_kept)                                                 -- normal respawns keep no data, dimension changes keep all, end portal only keeps attributes
+  )
+end
+
+-- Sets the center chunk around which loaded chunks can be sent, and chunks outside get unloaded. <br>
+-- The area where the client accepts chunks is a square with sides `2r+7`, and chunks are rendered in a `2r+1` square, <br>
+-- where `r` is the server render distance.
+---@param x integer Chunk x
+---@param z integer Chunk z
+function Connection:send_set_center_chunk(x, z)
+  log("setting center chunk to %i, %i", x, z)
+  self:send(PLAY_clientbound.set_chunk_cache_center, SendBuffer():varint(x):varint(z))
 end
 
 -- Sets the state of the Connection & sets the proper packet handling function
@@ -428,8 +452,8 @@ function Connection:handle_packet_login(packet_id)
     self:send(CONFIGURATION_clientbound.server_links, SendBuffer():varint(1):byte(1):varint(0):string("https://github.com/Penguin-Spy/quasar/issues"))
     -- send feature flags packet (enable vanilla features (not required for registry sync/client to connect, but probably important))
     self:send(CONFIGURATION_clientbound.update_enabled_features, SendBuffer():varint(1):string("minecraft:vanilla"))
-    -- start datapack negotiation (official server declares the "minecraft:core" datapack with version "1.21")
-    self:send(CONFIGURATION_clientbound.select_known_packs, SendBuffer():varint(1):string("minecraft"):string("core"):string("1.21"))
+    -- start datapack negotiation (official server declares the "minecraft:core" datapack with version "1.21.1")
+    self:send(CONFIGURATION_clientbound.select_known_packs, SendBuffer():varint(1):string("minecraft"):string("core"):string("1.21.1"))
 
     --
   else
@@ -453,7 +477,7 @@ function Connection:handle_packet_configuration(packet_id)
     end
 
     -- send registry data
-    local regs = registry.network_data
+    local regs = Registry.network_data
     self:send(CONFIGURATION_clientbound.registry_data, regs["worldgen/biome"])
     self:send(CONFIGURATION_clientbound.registry_data, regs.chat_type)
     self:send(CONFIGURATION_clientbound.registry_data, regs.trim_pattern)
@@ -471,8 +495,9 @@ function Connection:handle_packet_configuration(packet_id)
 
     --
   elseif packet_id == CONFIGURATION_serverbound.client_information then
+    local locale, view_distance, chat_mode, chat_colors = self.buffer:string(), self.buffer:byte(), self.buffer:varint(), self.buffer:boolean()
     self.buffer:read_to_end()
-    log("client information (configuration)")
+    log("client information (configuration): %s %i %i %q", locale, view_distance, chat_mode, chat_colors)
 
     --
   elseif packet_id == CONFIGURATION_serverbound.custom_payload then
@@ -490,7 +515,6 @@ function Connection:handle_packet_configuration(packet_id)
     local accept, message = self.server.on_join(player)
     if not accept then
       self:disconnect(message or "Join refused")
-      self:close()
       return
     end
 
@@ -505,32 +529,26 @@ function Connection:handle_packet_configuration(packet_id)
       :int(0):boolean(false)                                           -- entity id, is hardcore
       :varint(0)                                                       -- dimensions (appears to be ignored?)
       :varint(0)                                                       -- "max players" (unused)
-      :varint(10):varint(5)                                            -- view dist, sim dist
+      :varint(dim.view_distance):varint(5)                             -- view dist, sim dist
       :boolean(false):boolean(true):boolean(false)                     -- reduced debug, respawn screen, limited crafting
-      :varint(0)                                                       -- starting dim type (registry id)
+      :varint(Registry.dimension_type[dim.type])                       -- starting dim type (registry id)
       :string(dim.identifier)                                          -- starting dim name
       :long(0)                                                         -- hashed seeed
       :byte(1):byte(255):boolean(false):boolean(false):boolean(false)  -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
       :varint(0)                                                       -- portal cooldown (unknown use)
       :boolean(true)                                                   -- enforces secure chat (causes giant warning toast to show up if false, seemingly no other effects?)
     )
-    -- spawns player in dimension and loads entities
+
+    -- game event 13 (start waiting for chunks), float param of always 0 (4 bytes)
+    self:send(PLAY_clientbound.game_event, SendBuffer():byte(13):int(0))
+
+    -- spawns player in dimension and loads chunks & entities
+    -- sending chunks closes the connection screen and shows the player in the world
     dim:_add_player(player)
 
-    -- synchronize player position (do this first so the client doesn't default to (8.5,65,8.5) when chunks are sent)
-    self:synchronize_position()
     -- this does stuff with flight (flying + flight disabled + 0 fly speed -> locks player in place)
     -- invulnerable (unknown effect), flying, allow flying (allow toggling flight), creative mode/instant break (unknown effect), fly speed, fov modifier
     --self:send(PLAY_clientbound.player_abilities, string.pack(">bff", 0x01 | 0x02 | 0x04 | 0x08, 0.05, 0.1))
-
-    self:send(PLAY_clientbound.game_event, SendBuffer():byte(13):int(0))  -- game event 13 (start waiting for chunks), float param of always 0 (4 bytes)
-
-    -- send chunks (this closes the connection screen and shows the player in the world)
-    for x = -4, 4 do
-      for z = -4, 4 do
-        self:send_chunk(x, z, dim:get_chunk(x, z, player))
-      end
-    end
 
     self.keepalive_timer = copas_timer.new{
       name      = "quasar_connection_keepalive[" .. player.username .. "]",
@@ -590,8 +608,9 @@ function Connection:handle_packet_play(packet_id)
 
     --
   elseif packet_id == PLAY_serverbound.client_information then
+    local locale, view_distance, chat_mode, chat_colors = self.buffer:string(), self.buffer:byte(), self.buffer:varint(), self.buffer:boolean()
     self.buffer:read_to_end()
-    log("client information (play)")
+    log("client information (configuration): %s %i %i %q", locale, view_distance, chat_mode, chat_colors)
 
     --
   elseif packet_id == PLAY_serverbound.custom_payload then
@@ -605,11 +624,13 @@ function Connection:handle_packet_play(packet_id)
       self.buffer:read_to_end()
       return
     end
-    self.player.position:set(self.buffer:double(), self.buffer:double(), self.buffer:double())
-    self.player.on_ground = self.buffer:boolean()
+    local player = self.player
+    player.position:set(self.buffer:double(), self.buffer:double(), self.buffer:double())
+    player.on_ground = self.buffer:boolean()
     for _, con in pairs(self.listening_connections) do
-      con:send_move_entity(self.player)
+      con:send_move_entity(player)
     end
+    player.dimension:_on_player_moved(player)
 
     --
   elseif packet_id == PLAY_serverbound.move_player_pos_rot then
@@ -617,12 +638,14 @@ function Connection:handle_packet_play(packet_id)
       self.buffer:read_to_end()
       return
     end
-    self.player.position:set(self.buffer:double(), self.buffer:double(), self.buffer:double())
-    self.player.yaw, self.player.pitch = receive_facing(self.buffer:float(), self.buffer:float())
-    self.player.on_ground = self.buffer:boolean()
+    local player = self.player
+    player.position:set(self.buffer:double(), self.buffer:double(), self.buffer:double())
+    player.yaw, player.pitch = receive_facing(self.buffer:float(), self.buffer:float())
+    player.on_ground = self.buffer:boolean()
     for _, con in pairs(self.listening_connections) do
-      con:send_move_entity(self.player)
+      con:send_move_entity(player)
     end
+    player.dimension:_on_player_moved(player)
 
     --
   elseif packet_id == PLAY_serverbound.move_player_rot then

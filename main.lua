@@ -25,9 +25,59 @@ function overworld:on_break_block(player, pos)
   end
 end
 
+function overworld:on_command(player, command)
+  local c = util.split(command, " ")
+  if c[1] == "transfer" then
+    if c[2] == "nether" then
+      player:transfer_dimension(Server.get_dimension("minecraft:the_nether"))
+    else
+      player:send_system_message("unknown dimension")
+    end
+  else
+    player:send_system_message("unknown command")
+  end
+end
+
 
 local the_nether = Server.create_dimension("minecraft:the_nether")
-the_nether.spawnpoint:set(0.5, 66, 8.5)
+the_nether.spawnpoint:set(1.5, 66, 8.5)
+
+-- show letters in the ground for testing chunk loading
+-- s for spawn
+the_nether.chunks[0][0].subchunks[8].data[250] = 0x0111111000011110
+the_nether.chunks[0][0].subchunks[8].data[249] = 0x0111110111111110
+the_nether.chunks[0][0].subchunks[8].data[248] = 0x0111111000111110
+the_nether.chunks[0][0].subchunks[8].data[247] = 0x0111111111011110
+the_nether.chunks[0][0].subchunks[8].data[246] = 0x0111110000111110
+
+-- f for far
+the_nether.chunks[-3][0].subchunks[8].data[252] = 0x0111111100111110
+the_nether.chunks[-3][0].subchunks[8].data[251] = 0x0111111011111110
+the_nether.chunks[-3][0].subchunks[8].data[250] = 0x0111110000111110
+the_nether.chunks[-3][0].subchunks[8].data[249] = 0x0111111011111110
+the_nether.chunks[-3][0].subchunks[8].data[248] = 0x0111111011111110
+the_nether.chunks[-3][0].subchunks[8].data[247] = 0x0111111011111110
+the_nether.chunks[-3][0].subchunks[8].data[246] = 0x0111111011111110
+---- b for bonus (official edge chunks)
+the_nether.chunks[-4][0].subchunks[8].data[252] = 0x0111110111111110
+the_nether.chunks[-4][0].subchunks[8].data[251] = 0x0111110111111110
+the_nether.chunks[-4][0].subchunks[8].data[250] = 0x0111110100111110
+the_nether.chunks[-4][0].subchunks[8].data[249] = 0x0111110011011110
+the_nether.chunks[-4][0].subchunks[8].data[248] = 0x0111110111011110
+the_nether.chunks[-4][0].subchunks[8].data[247] = 0x0111110111011110
+the_nether.chunks[-4][0].subchunks[8].data[246] = 0x0111110000111110
+
+-- line of increading block id
+the_nether.chunks[-1][0].subchunks[8].data[245] = 0x0222222222222220
+the_nether.chunks[-2][0].subchunks[8].data[245] = 0x0333333333333330
+the_nether.chunks[-3][0].subchunks[8].data[245] = 0x0444444444444440
+the_nether.chunks[-4][0].subchunks[8].data[245] = 0x0555555555555550
+the_nether.chunks[-5][0].subchunks[8].data[245] = 0x0666666666666660
+the_nether.chunks[-6][0].subchunks[8].data[245] = 0x0777777777777770
+the_nether.chunks[-7][0].subchunks[8].data[245] = 0x0888888888888880
+the_nether.chunks[-8][0].subchunks[8].data[245] = 0x0999999999999990
+the_nether.chunks[-9][0].subchunks[8].data[245] = 0x0AAAAAAAAAAAAAA0
+the_nether.chunks[-10][0].subchunks[8].data[245] = 0x0BBBBBBBBBBBBBB0
 
 ---@param player Player
 ---@param command string
@@ -51,6 +101,12 @@ function the_nether:on_command(player, command)
       player.connection:synchronize_position()
     else
       player:send_system_message("syntax error")
+    end
+  elseif c[1] == "transfer" then
+    if c[2] == "overworld" then
+      player:transfer_dimension(Server.get_dimension("minecraft:overworld"))
+    else
+      player:send_system_message("unknown dimension")
     end
   else
     player:send_system_message('what no')
