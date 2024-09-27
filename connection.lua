@@ -80,6 +80,7 @@ local Connection = {}
 ---| 4 # configuration
 ---| 5 # end configuration, waiting for client to acknowledge
 ---| 6 # play
+---| 7 # closed
 local STATE_HANDSHAKE = 0
 local STATE_STATUS = 1
 local STATE_LOGIN = 2
@@ -87,6 +88,7 @@ local STATE_LOGIN_WAIT_ACK = 3
 local STATE_CONFIGURATION = 4
 local STATE_CONFIGURATION_WAIT_ACK = 5
 local STATE_PLAY = 6
+local STATE_CLOSED = 7
 
 
 -- Converts the angles sent by the client to the ranges used on the server.
@@ -149,6 +151,7 @@ end
 -- Immediately closes this connection; does not send any information to the client.
 function Connection:close()
   self.sock:close()
+  self:set_state(STATE_CLOSED)
   -- clear any data we might still have so the loop() doesn't try to read more packets
   self.buffer.data = ""
   -- cancel the keepalive timer if it exists
@@ -176,6 +179,7 @@ end
 -- If it hasn't, disconnects the client using the `"disconnect.timeout"` translation key.
 function Connection:keepalive()
   if not self.keepalive_received then
+    log("disconnecting %s because it timed out", self)
     self:disconnect{ translate = "disconnect.timeout" }
     return
   end
@@ -339,7 +343,6 @@ end
 ---@param x integer Chunk x
 ---@param z integer Chunk z
 function Connection:send_set_center_chunk(x, z)
-  log("setting center chunk to %i, %i", x, z)
   self:send(PLAY_clientbound.set_chunk_cache_center, SendBuffer():varint(x):varint(z))
 end
 
@@ -356,6 +359,8 @@ function Connection:set_state(state)
     self.handle_packet = Connection.handle_packet_configuration
   elseif state == STATE_PLAY then
     self.handle_packet = Connection.handle_packet_play
+  elseif state == STATE_CLOSED then
+    self.handle_packet = nil
   else
     error(string.format("unknown state %i", state))
   end
@@ -778,7 +783,7 @@ function Connection:handle_packet_play(packet_id)
 end
 
 function Connection:handle_legacy_ping()
-  self.buffer:read(27)                     -- discard irrelevant stuff
+  self.buffer:read(29)                     -- discard irrelevant stuff
   local protocol_id = self.buffer:byte()
   local str_len = self.buffer:short() * 2  -- UTF-16BE
   local server_addr = self.buffer:read(str_len)
@@ -792,42 +797,62 @@ end
 function Connection:loop()
   log("open '%s'", self)
   self:set_state(STATE_HANDSHAKE)
-  while true do
-    local _, err, data = self.sock:receivepartial("*a")
-    if err == "timeout" then
-      self.buffer:append(data)
-      repeat
-        local success, packet_err
-        local length = self.buffer:try_read_varint()
-        if length == 254 and self.buffer:peek_byte() == 0xFA then
-          self:handle_legacy_ping()
-        elseif length then
-          self.buffer:set_end(length)
-          success, packet_err = xpcall(self.handle_packet, debug.traceback, self, self.buffer:varint())
-          if not success then
-            err = packet_err
-          end
-        end
-      until not length or not success
+
+  -- read at least 1 byte to see if this is a legacy ping
+  local _, err, data = self.sock:receivepartial("*a")
+  if string.byte(data) == 0xFE then
+    self.buffer:append(data)
+    self:handle_legacy_ping()
+    return
+  end
+
+  repeat  -- socket receive loop
+    self.buffer:append(data)
+
+    while true do  -- packet handle loop
+      local length, bytes = self.buffer:try_peek_varint()
+      if not length then break end
+      if length > #self.buffer.data - bytes then break end  -- haven't received the full packet yet
+
+      self.buffer:read(bytes)                               -- remove the data of the varint from the buffer
+      self.buffer:set_end(length)
+
+      -- handle the packet
+      local success, packet_err = xpcall(self.handle_packet, debug.traceback, self, self.buffer:varint())
+      if not success then
+        err = packet_err
+        goto exit
+      end
     end
 
-    if err ~= "timeout" then
-      log("close '%s' - %s", self, err)
-      if self.player then              -- if this connection was in the game
-        -- TODO: any dimensionless player cleanup
-        if self.player.dimension then  -- if this player was in a dimension
-          self.player.dimension:_remove_player(self.player)
-        end
-      end
-      if self.keepalive_timer then
-        self.keepalive_timer:cancel()
-      end
-      -- if the socket wasn't closed, this was a Lua error while handling the packet
-      if err ~= "closed" then
-        self:disconnect("Internal server error")  -- do this last in case it fails (copas will close the socket if so)
-      end
-      break
+    _, err, data = self.sock:receivepartial("*a")
+  until err ~= "timeout"
+  ::exit::
+
+  log("close '%s' - %s", self, err)
+  self:destroy(true)
+end
+
+-- Destroy this connection, cleaning up all data (such as the player's presence in a Dimension). <br>
+-- This is the `__gc` metamethod (finalizer), and is also called when the `Connection:loop()` ends.
+---@param clean boolean?  `true` if called at the end of Connection:loop(), `nil` if called as the finalizer.
+function Connection:destroy(clean)
+  if self.state == STATE_CLOSED then return end  -- this connection was already closed
+
+  -- if this connection was in the game
+  if self.player then
+    -- TODO: any dimensionless player cleanup
+    if self.player.dimension then  -- if this player was in a dimension
+      self.player.dimension:_remove_player(self.player)
     end
+  end
+  if self.keepalive_timer then
+    self.keepalive_timer:cancel()
+  end
+  -- if the socket wasn't closed, this was a Lua error while handling the packet
+  if self.state ~= STATE_CLOSED then
+    if not clean then log("destroying connection from __gc") end
+    self:disconnect("Internal server error")  -- do this last in case it fails (copas will close the socket if so)
   end
 end
 
@@ -842,7 +867,8 @@ end
 
 local mt = {
   __index = Connection,
-  __tostring = Connection.tostring
+  __tostring = Connection.tostring,
+  __gc = Connection.destroy
 }
 
 -- Constructs a new Connection on the give socket

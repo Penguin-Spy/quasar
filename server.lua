@@ -15,13 +15,6 @@ local Dimension = require "dimension"
 local util = require "util"
 local log = require "log"
 
---[[local ssl_params = {
-  wrap = {
-    mode = "server",
-    protocol = "any"
-  }
-}]]
-
 ---@alias identifier string                                     A Minecraft identifier, in the form of `"namespace:thing"`
 ---@alias uuid       string                                     A UUID in binary form.
 ---@alias blockpos   {x: integer, y: integer, z: integer}       A block position in the world
@@ -111,10 +104,16 @@ local connections = {}
 
 local server_socket
 
--- Listens for connections on the specified address and port.
+-- Listens for connections on the specified address and port. <br>
+-- This does not start the copas loop, it only binds to the socket & adds the server thread; see `Server.run()`
 ---@param address string  The address to listen on, or `"*"` to listen on any address
 ---@param port integer    The port to listen on, usually `25565`, may be `0` to listen on an ephemeral port
 function Server.listen(address, port)
+  -- make sure a default dimension exists
+  if not default_dimension then
+    error("At least one dimension must be created and set as the default dimension before starting the server!")
+  end
+
   server_socket = assert(socket.bind(address, port))
 
   local function connection_handler(sock)
@@ -125,27 +124,36 @@ function Server.listen(address, port)
     util.remove_value(connections, con)
   end
 
-  copas.addserver(server_socket, copas.handler(connection_handler  --[[, ssl_params]]), "quasar_server")
-
-  -- make sure a default dimension exists
-  if not default_dimension then
-    error("At least one dimension must be created and set as the default dimension before starting the server!")
-  end
+  copas.addserver(server_socket, copas.handler(connection_handler), nil, "quasar_server")
 
   local listen_address, listen_port, listen_family = server_socket:getsockname()
   log("Listening for connections to %s:%i (%s)", listen_address, listen_port, listen_family)
   Server.address = listen_address
   Server.port = listen_port
-
-  Server.run()
 end
 
+-- Cleanly closes the server and all active connections.
+function Server.close()
+  copas.removeserver(server_socket)
+
+  local n_clients, n_dimensions = 0, 0
+  for _, con in pairs(connections) do
+    con:disconnect{ translate = "multiplayer.disconnect.server_shutdown" }
+    n_clients = n_clients + 1
+  end
+  for _, dim in pairs(dimensions) do
+    dim.timer:cancel()
+    n_dimensions = n_dimensions + 1
+  end
+
+  log("Closed server, %i clients, and %i dimensions", n_clients, n_dimensions)
+end
+
+-- A convenience function that runs the copas loop and catches Ctrl+C to call `Server.close()`
 function Server.run()
-  local success, msg
   repeat
-    ---@type boolean, string
-    success, msg = pcall(copas.step)
-    if not success then
+    local success, msg = pcall(copas.step)
+    if not success then  ---@cast msg -nil,-boolean,+string
       if msg:sub(-12) == "interrupted!" then
         -- caught Ctrl+C or other quit signal
         print("Caught quit signal, closing server and disconnecting all clients")
@@ -153,24 +161,10 @@ function Server.run()
         -- encountered an actual error
         print(debug.traceback(msg))
       end
-
-      -- close the server socket
-      copas.removeserver(server_socket)
-      -- close every Connection and Dimension
-      local n_clients, n_dimensions = 0, 0
-      for _, con in pairs(connections) do
-        con:disconnect{ translate = "multiplayer.disconnect.server_shutdown" }
-        n_clients = n_clients + 1
-      end
-      for _, dim in pairs(dimensions) do
-        dim.timer:cancel()
-        n_dimensions = n_dimensions + 1
-      end
-      log("Closed server, %i clients, and %i dimensions", n_clients, n_dimensions)
+      Server.close()
       return
     end
   until copas.finished()
-  return success, msg
 end
 
 return Server

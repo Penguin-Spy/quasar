@@ -62,7 +62,7 @@ end
 -- Internal method
 ---@param height integer  Number of subchunks in this chunk
 ---@return Chunk
-function Chunk._new(height)
+local function new(height)
   ---@type Chunk.subchunk[]
   local subchunks = {}
   for i = 1, height do
@@ -91,4 +91,25 @@ function Chunk._new(height)
   return self
 end
 
-return Chunk
+-- Precomputes and creates a chunk object that is entirely air.
+---@return Chunk
+local function new_empty(height)
+  local buffer = SendBuffer()
+  for _ = 1, height do
+    -- array of chunk section
+    buffer:short(0)         -- block count
+        :byte(0):varint(0)  -- block palette type 0, (single valued), single value: 0 (air)
+        :varint(0)          -- size of data array (0 for single valued)
+        :byte(0):varint(0)  -- biome palette type 0 (single valued), single value: 0  (whatever the 1st biome in the registry is)
+        :varint(0)          -- size of data array (0 for single valued)
+  end
+  local data = buffer:concat_with_length()
+  return {
+    get_data = function() return data end
+  }
+end
+
+return {
+  new = new,
+  new_empty = new_empty
+}

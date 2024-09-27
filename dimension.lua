@@ -19,6 +19,7 @@ local Chunk = require 'chunk'
 ---@field identifier identifier The unique namespaced identifier of this dimension
 ---@field type identifier       The identifier of this dimension's type
 ---@field chunks {[integer]: {[integer]: Chunk }}
+---@field empty_chunk Chunk?    A chunk comprised of entirely air, sent to the client for nonexistent chunks
 ---@field view_distance integer Radius in chunks; the area where the client accepts chunks is a square with sides `2r+7`, and chunks are rendered in a `2r+1` square.
 ---@field players Player[]      All players currently in this Dimension
 ---@field entities Entity[]
@@ -120,12 +121,16 @@ end
 -- Updates the block at the specified position for all players in this dimension.
 ---@param position blockpos
 ---@param state integer     The block state ID to set at the position
+---@return boolean        # Whether the placement was successful
 function Dimension:set_block(position, state)
+  local chunk = self:get_chunk(position.x // 16, position.z // 16)
+  if not chunk then return false end
+
+  chunk:set_block(position, state)
   for _, p in pairs(self.players) do
     p:set_block(position, state)
   end
-  local chunk = self.chunks[position.x // 16][position.z // 16]
-  chunk:set_block(position, state)
+  return true
 end
 
 -- Broadcasts a chat message to all players in the dimension
@@ -164,10 +169,12 @@ end
 -- Gets the chunk at the specified chunk coordinates.
 ---@param chunk_x integer
 ---@param chunk_z integer
----@param player Player   the player to get the chunk for
----@return Chunk chunk
+---@param player Player?   the player to get the chunk for
+---@return Chunk|nil chunk
 function Dimension:get_chunk(chunk_x, chunk_z, player)
-  return self.chunks[chunk_x][chunk_z]
+  local cx = self.chunks[chunk_x]
+  if not cx then return end
+  return cx[chunk_z]
 end
 
 -- Spawns the player into the dimension, adding their player entity & raising `on_player_join`.
@@ -203,6 +210,8 @@ function Dimension:_add_player(player)
   -- send chunks to the player
   local pos = player.position
   self:_on_player_changed_chunk(player, pos.x // 16, pos.y // 16, pos.z // 16, true)
+  -- resync position in case the client fell into the void while loading chunks
+  player.connection:synchronize_position()
 end
 
 -- Removes the player from this Dimension, despawning their player entity.
@@ -247,7 +256,13 @@ end
 ---@param load_all boolean? If true, all chunks in the view distance will be sent to the client (i.e. when first joining the dimension)
 function Dimension:_on_player_changed_chunk(player, cx, cy, cz, load_all)
   local cpos = player.chunk_position
-  log("changed chunk to %i, %i, %i", cx, cy, cz)
+
+  -- skip loading if only the Y changed
+  if cx == cpos.x and cz == cpos.z and not load_all then
+    cpos:set(cx, cy, cz)
+    return
+  end
+
   player.connection:send_set_center_chunk(cx, cz)
   local r = self.view_distance + 3  -- extra 3 chunks is from `2r+7`
 
@@ -255,11 +270,9 @@ function Dimension:_on_player_changed_chunk(player, cx, cy, cz, load_all)
     for z = cz - r, cz + r do
       if (x < (cpos.x - r)) or (x > (cpos.x + r))
           or (z < (cpos.z - r)) or (z > (cpos.z + r)) or load_all then
-        if self.chunks[x] and self.chunks[x][z] then
-          log("sending new chunk at %i, %i", x, z)
-          player.connection:send_chunk(x, z, self:get_chunk(x, z, player))
-        else
-          log("would send new chunk at %i, %i but it's outside the world", x, z)
+        local chunk = self:get_chunk(x, z, player) or self.empty_chunk
+        if chunk then  -- the dimension may have no empty_chunk set
+          player.connection:send_chunk(x, z, chunk)
         end
       end
     end
@@ -288,9 +301,10 @@ function Dimension._new(identifier, dimension_type)
   for x = -10, 10 do
     self.chunks[x] = {}
     for z = -4, 4 do
-      self.chunks[x][z] = Chunk._new(24)
+      self.chunks[x][z] = Chunk.new(24)
     end
   end
+  self.empty_chunk = Chunk.new_empty(24)
   setmetatable(self, { __index = Dimension })
   return self
 end

@@ -69,39 +69,55 @@ function ReceiveBuffer:read_to_end()
   return self:read(self.end_boundary + #self.data)
 end
 
--- Attempts to read a VarInt from the start of the buffer.
----@return integer?
-function ReceiveBuffer:try_read_varint()
+-- Attempts to parse a VarInt from the provided buffer
+---@param data string
+---@return integer|nil value  The value read, or `nil` if there weren't enough bytes in the buffer to read the whole value
+---@return integer     bytes  The number of bytes that the VarInt uses
+local function varint(data)
   local value = 0
-  for i = 0, 5 * 7, 7 do
-    local b = self:byte()
-    if not b then return end
-    value = value + ((b & 0x7F) << i)
-    if (b & 0x80) ~= 0x80 then
+  for i = 0, 5 do
+    local b = string_byte(data, i + 1)
+    if not b then return end  ---@diagnostic disable-line: missing-return-value
+    value = value + ((b & 0x7F) << (i * 7))
+    if (b & 0x80) == 0 then      -- if the continue bit isn't set
       if value >= (2 ^ 31) then  -- wrap back into 32 bit signed integer range
-        return value - (2 ^ 32)
+        return value - (2 ^ 32), i + 1
       else
-        return value
+        return value, i + 1
       end
     end
   end
   error("too long or invalid VarInt")
 end
 
+function ReceiveBuffer:try_peek_varint()
+  return varint(self.data)
+end
+
+function ReceiveBuffer:try_read_varint()
+  local value, bytes = varint(self.data)
+  if not value then return end
+  self.data = string_sub(self.data, bytes + 1)
+  return value
+end
+
 -- Reads a VarInt from the start of the buffer.
 ---@return integer
 function ReceiveBuffer:varint()
-  local value = self:try_read_varint()
+  local value, bytes = varint(self.data)
   if not value then error("reached end of buffer while reading VarInt") end
+  self.data = string_sub(self.data, bytes + 1)
   return value
 end
 
 -- Reads a String from the start of the buffer.
 ---@return string
 function ReceiveBuffer:string()
-  local length = self:try_read_varint()
+  local length, bytes = varint(self.data)
   if not length then error("reached end of buffer while reading String") end
-  return self:read(length)
+  local data = string_sub(self.data, bytes + 1, length + 1)  -- read from after the varint to the end of the string
+  self.data = string_sub(self.data, length + 2)              -- then remove all data up to the end of the varint & string
+  return data
 end
 
 -- Reads a boolean from the buffer.

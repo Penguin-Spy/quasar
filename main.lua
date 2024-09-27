@@ -10,7 +10,7 @@
 -- we redefine fields to set the event handlers
 ---@diagnostic disable: duplicate-set-field
 
-local Server = require "server"
+local Server = require "Server"
 local log = require "log"
 local util = require "util"
 
@@ -44,40 +44,43 @@ the_nether.spawnpoint:set(1.5, 66, 8.5)
 
 -- show letters in the ground for testing chunk loading
 -- s for spawn
-the_nether.chunks[0][0].subchunks[8].data[250] = 0x0111111000011110
-the_nether.chunks[0][0].subchunks[8].data[249] = 0x0111110111111110
-the_nether.chunks[0][0].subchunks[8].data[248] = 0x0111111000111110
-the_nether.chunks[0][0].subchunks[8].data[247] = 0x0111111111011110
-the_nether.chunks[0][0].subchunks[8].data[246] = 0x0111110000111110
+local spawn_chunk_data = the_nether:get_chunk(0, 0).subchunks[8].data
+spawn_chunk_data[250] = 0x0111111000011110
+spawn_chunk_data[249] = 0x0111110111111110
+spawn_chunk_data[248] = 0x0111111000111110
+spawn_chunk_data[247] = 0x0111111111011110
+spawn_chunk_data[246] = 0x0111110000111110
 
 -- f for far
-the_nether.chunks[-3][0].subchunks[8].data[252] = 0x0111111100111110
-the_nether.chunks[-3][0].subchunks[8].data[251] = 0x0111111011111110
-the_nether.chunks[-3][0].subchunks[8].data[250] = 0x0111110000111110
-the_nether.chunks[-3][0].subchunks[8].data[249] = 0x0111111011111110
-the_nether.chunks[-3][0].subchunks[8].data[248] = 0x0111111011111110
-the_nether.chunks[-3][0].subchunks[8].data[247] = 0x0111111011111110
-the_nether.chunks[-3][0].subchunks[8].data[246] = 0x0111111011111110
+local far_chunk_data = the_nether:get_chunk(-3, 0).subchunks[8].data
+far_chunk_data[252] = 0x0111111100111110
+far_chunk_data[251] = 0x0111111011111110
+far_chunk_data[250] = 0x0111110000111110
+far_chunk_data[249] = 0x0111111011111110
+far_chunk_data[248] = 0x0111111011111110
+far_chunk_data[247] = 0x0111111011111110
+far_chunk_data[246] = 0x0111111011111110
 ---- b for bonus (official edge chunks)
-the_nether.chunks[-4][0].subchunks[8].data[252] = 0x0111110111111110
-the_nether.chunks[-4][0].subchunks[8].data[251] = 0x0111110111111110
-the_nether.chunks[-4][0].subchunks[8].data[250] = 0x0111110100111110
-the_nether.chunks[-4][0].subchunks[8].data[249] = 0x0111110011011110
-the_nether.chunks[-4][0].subchunks[8].data[248] = 0x0111110111011110
-the_nether.chunks[-4][0].subchunks[8].data[247] = 0x0111110111011110
-the_nether.chunks[-4][0].subchunks[8].data[246] = 0x0111110000111110
+local bonus_chunk_data = the_nether:get_chunk(-4, 0).subchunks[8].data
+bonus_chunk_data[252] = 0x0111110111111110
+bonus_chunk_data[251] = 0x0111110111111110
+bonus_chunk_data[250] = 0x0111110100111110
+bonus_chunk_data[249] = 0x0111110011011110
+bonus_chunk_data[248] = 0x0111110111011110
+bonus_chunk_data[247] = 0x0111110111011110
+bonus_chunk_data[246] = 0x0111110000111110
 
 -- line of increading block id
-the_nether.chunks[-1][0].subchunks[8].data[245] = 0x0222222222222220
-the_nether.chunks[-2][0].subchunks[8].data[245] = 0x0333333333333330
-the_nether.chunks[-3][0].subchunks[8].data[245] = 0x0444444444444440
-the_nether.chunks[-4][0].subchunks[8].data[245] = 0x0555555555555550
-the_nether.chunks[-5][0].subchunks[8].data[245] = 0x0666666666666660
-the_nether.chunks[-6][0].subchunks[8].data[245] = 0x0777777777777770
-the_nether.chunks[-7][0].subchunks[8].data[245] = 0x0888888888888880
-the_nether.chunks[-8][0].subchunks[8].data[245] = 0x0999999999999990
-the_nether.chunks[-9][0].subchunks[8].data[245] = 0x0AAAAAAAAAAAAAA0
-the_nether.chunks[-10][0].subchunks[8].data[245] = 0x0BBBBBBBBBBBBBB0
+the_nether:get_chunk(-1, 0).subchunks[8].data[245] = 0x0222222222222220
+the_nether:get_chunk(-2, 0).subchunks[8].data[245] = 0x0333333333333330
+far_chunk_data[245] = 0x0444444444444440
+bonus_chunk_data[245] = 0x0555555555555550
+the_nether:get_chunk(-5, 0).subchunks[8].data[245] = 0x0666666666666660
+the_nether:get_chunk(-6, 0).subchunks[8].data[245] = 0x0777777777777770
+the_nether:get_chunk(-7, 0).subchunks[8].data[245] = 0x0888888888888880
+the_nether:get_chunk(-8, 0).subchunks[8].data[245] = 0x0999999999999990
+the_nether:get_chunk(-9, 0).subchunks[8].data[245] = 0x0AAAAAAAAAAAAAA0
+the_nether:get_chunk(-10, 0).subchunks[8].data[245] = 0x0BBBBBBBBBBBBBB0
 
 ---@param player Player
 ---@param command string
@@ -108,6 +111,8 @@ function the_nether:on_command(player, command)
     else
       player:send_system_message("unknown dimension")
     end
+  elseif c[1] == "disconnect" then
+    player.connection:disconnect("bye")
   else
     player:send_system_message('what no')
   end
@@ -129,3 +134,4 @@ function Server.on_join(player)
 end
 
 Server.listen("*", 25565)
+Server.run()
