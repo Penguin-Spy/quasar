@@ -12,6 +12,7 @@ local Vector3 = require "Vector3"
 ---@class Player : Entity
 ---@field username string
 ---@field uuid uuid
+---@field texture {value: string, signature: string?}
 ---@field inventory table<integer, Item>
 ---@field selected_slot integer  0-8
 ---@field connection Connection
@@ -113,10 +114,11 @@ end
 
 -- Internal method
 ---@param username string
----@param uuid string       The player's UUID in binary form.
+---@param uuid uuid         The player's UUID in binary form.
 ---@param con Connection
+---@param texture? {value: string, signature: string?}
 ---@return Player
-function Player._new(username, uuid, con)
+function Player._new(username, uuid, con, texture)
   local self = {
     type = "minecraft:player",  -- for Entity
     position = Vector3.new(),
@@ -127,6 +129,7 @@ function Player._new(username, uuid, con)
     last_sync_yaw = 0,
     username = username,
     uuid = uuid,
+    texture = texture,
     inventory = {},
     selected_slot = 0,
     connection = con,

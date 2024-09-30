@@ -25,7 +25,11 @@ local identifier_pattern = "^[%l%d_%-]+:[%l%d_%-]+$"
 ---@class Server
 ---@field address string  The IP address the server is listening for connections on. `0.0.0.0` means any address.
 ---@field port integer    The port the server is listening for connections on.
-local Server = {}
+local Server = {
+  properties = {
+    online_mode = true
+  }
+}
 
 ---@type table<identifier, Dimension>
 local dimensions = {}
@@ -79,9 +83,9 @@ end
 ---@type table<uuid, Player>
 local players = {}
 
--- Called at the beginning of the connection ~~right after the player has been authenticated~~.
+-- Called at the beginning of the connection right after the player has been authenticated.
 ---@param username string   The username sent by the client
----@param uuid uuid?        Always `nil` - authentication is not implemented yet
+---@param uuid uuid?        The player's UUID if in online mode, or nil in offline mode
 ---@return boolean?         accept  A falsy return value will disconnect the player immediately
 ---@return text_component?  message The message to display to the player when disconnected. The client will show this with a title of "Failed to connect to the server"
 function Server.on_login(username, uuid)
@@ -114,10 +118,22 @@ function Server.listen(address, port)
     error("At least one dimension must be created and set as the default dimension before starting the server!")
   end
 
+  -- generate the server's public/private keypair
+  if Server.properties.online_mode then
+    local pkey = require "openssl.pkey"
+    local mime = require "mime"  -- from LuaSocket
+    Server.key = pkey.new{ type = "RSA", bits = 1024 }
+
+    -- Convert from PEM to ASN1.DER (dump as PEM, remove newlines, remove header/footer, decode base64 to raw bytes)
+    Server.public_key_encoded = mime.unb64(Server.key:toPEM():gsub("\n", ""):sub(27, -25))
+  end
+
+  Connection.initalize(Server)
+
   server_socket = assert(socket.bind(address, port))
 
   local function connection_handler(sock)
-    local con = Connection.new(sock, Server)
+    local con = Connection.new(sock)
     table.insert(connections, con)
     con:loop()
     -- remove connection from table when it closes

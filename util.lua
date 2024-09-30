@@ -38,18 +38,25 @@ function util.new_UUID()
   )
 end
 
--- Converts a UUID in binary form to a human-readable string.
+-- Converts a UUID in binary form to a human-readable string with hyphens.
 ---@param uuid uuid
 ---@return string
 function util.UUID_to_string(uuid)
   local out = ""
   for i = 1, 16 do
-    out = out .. string.format("%02X", uuid:byte(i))
+    out = out .. string.format("%02x", uuid:byte(i))
     if i == 4 or i == 6 or i == 8 or i == 10 then
       out = out .. "-"
     end
   end
   return out
+end
+
+-- Converts a UUID in string form (with or without hyphens) to binary form.
+---@param uuid_str string
+---@return uuid
+function util.string_to_UUID(uuid_str)
+  return ((uuid_str:gsub("%-", "")):gsub("%x%x", function(chars) return string.char(tonumber(chars, 16)) end))
 end
 
 -- Loads the contents of a JSON file as a Lua table.

@@ -9,6 +9,7 @@
 
 local json = require 'lunajson'
 local copas_timer = require 'copas.timer'
+local http = require 'copas.http'
 
 local ReceiveBuffer = require "ReceiveBuffer"
 local SendBuffer = require 'SendBuffer'
@@ -18,6 +19,11 @@ local Registry = require "registry"
 local NBT = require "nbt"
 local Player = require "player"
 local Item = require "item"
+
+---@class Server
+local Server
+-- only require "openssl.cipher",  "openssl.digest", and "openssl.bignum" if the server has encryption enabled
+local cipher, digest, bn
 
 local HANDSHAKE_serverbound
 local STATUS_serverbound
@@ -63,7 +69,6 @@ end
 ---@field sock LuaSocket
 ---@field buffer ReceiveBuffer
 ---@field state state
----@field server Server
 ---@field current_teleport_id integer
 ---@field current_teleport_acknowledged boolean
 ---@field keepalive_timer table?
@@ -76,19 +81,21 @@ local Connection = {}
 ---| 0 # handshake
 ---| 1 # status
 ---| 2 # login
----| 3 # end login, waiting for client to acknowledge
----| 4 # configuration
----| 5 # end configuration, waiting for client to acknowledge
----| 6 # play
----| 7 # closed
+---| 3 # login, waiting for encryption response
+---| 4 # end login, waiting for client to acknowledge
+---| 5 # configuration
+---| 6 # end configuration, waiting for client to acknowledge
+---| 7 # play
+---| 8 # closed
 local STATE_HANDSHAKE = 0
 local STATE_STATUS = 1
 local STATE_LOGIN = 2
-local STATE_LOGIN_WAIT_ACK = 3
-local STATE_CONFIGURATION = 4
-local STATE_CONFIGURATION_WAIT_ACK = 5
-local STATE_PLAY = 6
-local STATE_CLOSED = 7
+local STATE_LOGIN_WAIT_ENCRYPT = 3
+local STATE_LOGIN_WAIT_ACK = 4
+local STATE_CONFIGURATION = 5
+local STATE_CONFIGURATION_WAIT_ACK = 6
+local STATE_PLAY = 7
+local STATE_CLOSED = 8
 
 
 -- Converts the angles sent by the client to the ranges used on the server.
@@ -127,7 +134,16 @@ end
 ---@param self Connection
 ---@param data string       The packet's data, including the packet id.
 local function send_raw(self, data)
-  self.sock:send(SendBuffer():varint(#data):raw(data):concat())
+  local packet, err = SendBuffer():varint(#data):raw(data):concat()
+  if self.encrypted then
+    packet, err = self.send_cipher:update(packet)
+    if packet == "" then
+      return  -- "The returned string may be empty if no blocks can be flushed."
+    elseif not packet then
+      error(err)
+    end
+  end
+  self.sock:send(packet)
 end
 
 -- Sends a packet to the client.
@@ -166,7 +182,7 @@ function Connection:disconnect(message)
   if type(message) ~= "table" then
     message = { text = tostring(message) }
   end
-  if self.state == STATE_LOGIN then
+  if self.state == STATE_LOGIN or self.state == STATE_LOGIN_WAIT_ENCRYPT then
     self:send(LOGIN_clientbound.login_disconnect, SendBuffer():string(json.encode(message)))
   elseif self.state == STATE_PLAY then
     self:send(PLAY_clientbound.disconnect, SendBuffer():raw(NBT.compound(message)))
@@ -249,9 +265,22 @@ function Connection:add_players(players)
   -- 0x01 Add Player | 0x08 Update Listed, # of players in the array
   local buffer = SendBuffer():byte(0x09):varint(#players)
   for _, player in pairs(players) do
-    -- uuid, username, 0 properties, is listed
-    buffer:raw(player.uuid):string(player.username):varint(0):boolean(true)
-    --players_data = players_data .. player.uuid .. ReceiveBuffer.encode_string(player.username) .. ReceiveBuffer.encode_varint(0) .. '\1'
+    -- uuid, username
+    buffer:raw(player.uuid):string(player.username)
+    -- properties
+    if player.texture then
+      buffer:varint(1):string("textures"):string(player.texture.value)
+      if player.texture.signature then
+        buffer:boolean(true):string(player.texture.signature)
+      else
+        buffer:boolean(false)
+      end
+    else
+      buffer:varint(0)
+    end
+    -- is listed
+    buffer:boolean(true)
+
     -- start listening to the player's connection
     player.connection:add_listener(self)
   end
@@ -353,7 +382,7 @@ function Connection:set_state(state)
     self.handle_packet = Connection.handle_packet_handshake
   elseif state == STATE_STATUS then
     self.handle_packet = Connection.handle_packet_status
-  elseif state == STATE_LOGIN or state == STATE_LOGIN_WAIT_ACK then
+  elseif state == STATE_LOGIN or state == STATE_LOGIN_WAIT_ENCRYPT or state == STATE_LOGIN_WAIT_ACK then
     self.handle_packet = Connection.handle_packet_login
   elseif state == STATE_CONFIGURATION or state == STATE_CONFIGURATION_WAIT_ACK then
     self.handle_packet = Connection.handle_packet_configuration
@@ -371,7 +400,7 @@ end
 ---@param packet_id integer
 function Connection:handle_packet_handshake(packet_id)
   if packet_id == HANDSHAKE_serverbound.intention then
-    -- Begin connection (corresponds to "Connecting to the server..." on the client connection screen
+    -- Begin connection (corresponds to "Connecting to the server..." on the client connection screen)
     local protocol_id = self.buffer:varint()
     local server_addr = self.buffer:string()
     local server_port = self.buffer:short()
@@ -391,12 +420,8 @@ function Connection:handle_packet_handshake(packet_id)
 end
 
 local status_response = json.encode{
-  version = { name = "1.21", protocol = 767 },
-  players = { max = 0, online = 2,
-    sample = {
-      { name = "Penguin_Spy", id = "dfbd911d-9775-495e-aac3-efe339db7efd" }
-    }
-  },
+  version = { name = "1.21.1", protocol = 767 },
+  players = { max = 0, online = 2 },
   description = { text = "woah haiii :3" },
   enforcesSecureChat = false,
   previewsChat = false
@@ -421,29 +446,123 @@ function Connection:handle_packet_status(packet_id)
 end
 
 
+-- completes the login process
+---@param self Connection
+---@param username string
+---@param uuid uuid
+---@param texture? {value: string, signature: string?}
+function Connection:_finish_login(username, uuid, texture)
+  local accept, message = Server.on_login(username, self.encrypted and uuid or nil)
+  if not accept then
+    self:disconnect(message or "Login refused")
+    return
+  end
+
+  self.player = Player._new(username, uuid, self, texture)
+
+  log("login finish: '%s' (%s), %q", username, util.UUID_to_string(uuid), texture ~= nil)
+  -- Send login success (corresponds to "Joining world..." on the client connection screen)
+  -- it appears that sending the player's skin (texture) property in the login packet has no effect
+  -- and it must be sent in the player list info update for the player's own info instead
+  self:send(LOGIN_clientbound.game_profile, SendBuffer():raw(uuid):string(username):varint(0):byte(1))  -- last byte is strict error handling
+  self:set_state(STATE_LOGIN_WAIT_ACK)
+end
+
+-- calculates minecraft's non-standard sha1 hex digest string
+local function hexdigest(hash)
+  if string.byte(hash) > 0x7F then
+    -- convert to a bignum in 2's compliment
+    -- cannot use bignum.fromBinary() because we need to flip the bytes first, as we can't do bitwise operations on a bignum
+    local n = bn.new()
+    for i = 1, 20 do
+      n = (n << 8) + (0xFF - string.byte(hash, i))  -- flip bytes
+    end
+    n = n + 1                                       -- and add 1
+    hash = n:toHex():lower()                        -- then print as a hexadecimal string
+    -- remove leading '0's and prepend the negative sign
+    hash = "-" .. (string.gsub(hash, "^0+", "", 1))
+  else
+    -- convert to hexadecimal string
+    hash = (string.gsub(hash, ".", function(char) return string.format("%02x", string.byte(char)) end))
+    -- remove leading '0's ()
+    hash = (string.gsub(hash, "^0+", "", 1))
+  end
+  return hash
+end
+
 -- Handles a single packet in the login state
 ---@param packet_id integer
 function Connection:handle_packet_login(packet_id)
   -- only valid to receive BEFORE we've sent the game_profile packet
   if packet_id == LOGIN_serverbound.hello and self.state == STATE_LOGIN then
     local username = self.buffer:string()
-    local uuid_str = self.buffer:dump(16)
-    self.buffer:read_to_end()  -- discard client-sent UUID
-    local uuid = util.new_UUID()
-    log("login start: '%s' (client sent %s, joining as %s)", username, uuid_str, util.UUID_to_string(uuid))
-    -- TODO: encryption & compression
+    local uuid = self.buffer:read(16)
+    log("login start: '%s' (client sent %s)", username, util.UUID_to_string(uuid))
+    -- TODO: compression
 
-    local accept, message = self.server.on_login(username)
-    if not accept then
-      self:disconnect(message or "Login refused")
-      return
+    if Server.properties.online_mode then
+      local public_key_encoded = Server.public_key_encoded
+      self.verify_token = string.char(math.random(0, 255), math.random(0, 255), math.random(0, 255), math.random(0, 255))
+      -- encryption request (corresponds to "Logging in..." and "Encrypting..." on the client connection screen)
+      self:send(LOGIN_clientbound.hello, SendBuffer()
+        :string("")                                           -- Server ID (always an empty string)
+        :varint(#public_key_encoded):raw(public_key_encoded)  -- Public Key
+        :varint(4):raw(self.verify_token)                     -- random Verify Token (always 4 bytes)
+        :boolean(true)                                        -- should authenticate
+      )
+      self:set_state(STATE_LOGIN_WAIT_ENCRYPT)
+      self.username = username  -- save username for contacting the session server
+      return                    -- delay login until after encryption
     end
 
-    self.player = Player._new(username, uuid, self)
+    -- TODO: in offline mode, generate a UUIDv2 based on the username like the offical server does
+    self:_finish_login(username, util.new_UUID())
 
-    -- Send login success (corresponds to "Joining world..." on the client connection screen)
-    self:send(LOGIN_clientbound.game_profile, SendBuffer():raw(uuid):string(username):varint(0):byte(1))  -- last byte is strict error handling
-    self:set_state(STATE_LOGIN_WAIT_ACK)
+    -- only valid to receive AFTER we've sent the encryption request packet
+  elseif packet_id == LOGIN_serverbound.key and self.state == STATE_LOGIN_WAIT_ENCRYPT then
+    log("encryption response")
+    local shared_secret_encrypted = self.buffer:read(self.buffer:varint())  -- read varint, then byte array
+    local verify_token_encrypted = self.buffer:read(self.buffer:varint())
+    local shared_secret_clear = Server.key:decrypt(shared_secret_encrypted)
+    local verify_token_clear = Server.key:decrypt(verify_token_encrypted)
+
+    if verify_token_clear ~= self.verify_token then
+      log("verify token mismatch")
+      self:disconnect("Encryption error")  -- message won't ever be seen, the client expects the connection to be encrypted by now
+    end
+
+    -- initalize & enable encryption
+    self.send_cipher = cipher.new("AES-128-CFB8"):encrypt(shared_secret_clear, shared_secret_clear)
+    self.receive_cipher = cipher.new("AES-128-CFB8"):decrypt(shared_secret_clear, shared_secret_clear)
+    self.encrypted = true
+
+    -- calculate minecraft's non-standard sha1 hex digest string
+    local hash = hexdigest(digest.new("sha1"):update(shared_secret_clear):final(Server.public_key_encoded))
+
+    -- session server returns 204 no content if the hash is invalid or the player isn't logged in
+    -- or 200 OK and the UUID & skin blob
+    local res, status = http.request("https://sessionserver.mojang.com/session/minecraft/hasJoined?username=" .. self.username .. "&serverId=" .. hash)
+    if not res or status ~= 200 then
+      if status == 204 then  -- not authenticated
+        self:disconnect("Authentication failed")
+      else                   -- request failure or non-ok status code
+        self:disconnect{ translate = "disconnect.loginFailedInfo.serversUnavailable" }
+      end
+      return
+    end
+    local data = json.decode(res)
+
+    -- read the session server response to get the player's cannonical username, uuid, & skin data
+    local auth_uuid = util.string_to_UUID(data.id)
+    local auth_username = data.name        -- the session server request parameter is case-insensitive, use the response to prevent clients from changing the capitalization of their name
+    local texture
+    for _, v in pairs(data.properties) do  -- i'm not sure when properties would ever have anything else, but just in case
+      if v.name == "textures" then
+        texture = { value = v.value, signature = v.signature }
+      end
+    end
+
+    self:_finish_login(auth_username, auth_uuid, texture)
 
     -- only valid to receive AFTER we've sent the game_profile packet
   elseif packet_id == LOGIN_serverbound.login_acknowledged and self.state == STATE_LOGIN_WAIT_ACK then
@@ -517,7 +636,7 @@ function Connection:handle_packet_configuration(packet_id)
 
     local player = self.player
     -- allow setup of player event handlers & loading inventory, dimension, etc.
-    local accept, message = self.server.on_join(player)
+    local accept, message = Server.on_join(player)
     if not accept then
       self:disconnect(message or "Join refused")
       return
@@ -525,7 +644,7 @@ function Connection:handle_packet_configuration(packet_id)
 
     -- add the player to the default dimension if the on_join handler didn't add them to any
     if not player.dimension then
-      player.dimension = self.server.get_default_dimension()
+      player.dimension = Server.get_default_dimension()
     end
     local dim = player.dimension
 
@@ -622,6 +741,12 @@ function Connection:handle_packet_play(packet_id)
     local channel = self.buffer:string()
     local data = self.buffer:read_to_end()
     log("plugin message (play) on channel '%s' with data: '%s'", channel, data)
+
+    --
+  elseif packet_id == PLAY_serverbound.chat_session_update then
+    local uuid = self.buffer:read(16)
+    log("player session update '%s'", util.UUID_to_string(uuid))
+    self.buffer:read_to_end()
 
     --
   elseif packet_id == PLAY_serverbound.move_player_pos then
@@ -807,6 +932,14 @@ function Connection:loop()
   end
 
   repeat  -- socket receive loop
+    if self.encrypted then
+      data, err = self.receive_cipher:update(data)
+      if data == "" then
+        goto no_data_yet  -- "The returned string may be empty if no blocks can be flushed."
+      elseif not data then
+        goto exit         -- err is set to whatever the openssl error was
+      end
+    end
     self.buffer:append(data)
 
     while true do  -- packet handle loop
@@ -824,6 +957,8 @@ function Connection:loop()
         goto exit
       end
     end
+
+    ::no_data_yet::
 
     _, err, data = self.sock:receivepartial("*a")
   until err ~= "timeout"
@@ -871,17 +1006,15 @@ local mt = {
   __gc = Connection.destroy
 }
 
--- Constructs a new Connection on the give socket
+-- Constructs a new Connection on the given socket.
 ---@param sock LuaSocket
----@param server Server  a reference to the Server (can't require bc circular dependency)
 ---@return Connection
-local function new(sock, server)
+local function new(sock)
   ---@type Connection
   local self = {
     sock = sock,
     buffer = ReceiveBuffer(),
     state = STATE_HANDSHAKE,
-    server = server,
     current_teleport_id = 0,
     current_teleport_acknowledged = true,
     keepalive_received = true,
@@ -891,6 +1024,18 @@ local function new(sock, server)
   return self
 end
 
+-- Sets up local references to the server & requires openssl modules if necessary.
+---@param the_server Server a reference to the Server (can't require bc circular dependency)
+local function initalize(the_server)
+  Server = the_server
+  if Server.properties.online_mode then
+    cipher = require "openssl.cipher"
+    digest = require "openssl.digest"
+    bn = require "openssl.bignum"
+  end
+end
+
 return {
-  new = new
+  new = new,
+  initalize = initalize
 }
