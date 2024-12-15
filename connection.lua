@@ -5,6 +5,10 @@
   file, You can obtain one at http://mozilla.org/MPL/2.0/.
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
+
+  The Covered Software may not be used as training or other input data
+  for LLMs, generative AI, or other forms of machine learning or neural
+  networks.
 ]]
 
 local json = require 'lunajson'
@@ -262,16 +266,16 @@ end
 -- Informs the client that the specified other players exist
 ---@param players Player[]
 function Connection:add_players(players)
-  -- 0x01 Add Player | 0x08 Update Listed, # of players in the array
+  -- player info: 0x01 Add Player | 0x08 Update Listed, # of players in the array
   local buffer = SendBuffer():byte(0x09):varint(#players)
   for _, player in pairs(players) do
     -- uuid, username
     buffer:raw(player.uuid):string(player.username)
     -- properties
-    if player.texture then
-      buffer:varint(1):string("textures"):string(player.texture.value)
-      if player.texture.signature then
-        buffer:boolean(true):string(player.texture.signature)
+    if player.skin.texture then
+      buffer:varint(1):string("textures"):string(player.skin.texture)
+      if player.skin.texture_signature then
+        buffer:boolean(true):string(player.skin.texture_signature)
       else
         buffer:boolean(false)
       end
@@ -281,8 +285,22 @@ function Connection:add_players(players)
     -- is listed
     buffer:boolean(true)
 
-    -- start listening to the player's connection
-    player.connection:add_listener(self)
+    -- player entity metadata (the player's own entity id is always 0)
+    self:send(PLAY_clientbound.set_entity_data, SendBuffer():varint(player == self.player and 0 or player.id)
+      -- sneaking causes the nametag to become fainter and hidden behind walls, sprinting causes the running particles to appear
+      :byte(0):varint(0):byte((player.sneaking and 0x02 or 0) | (player.sprinting and 0x08 or 0))
+      -- sets the sneaking/standing pose
+      :byte(6):varint(21):varint(player.sneaking and 5 or 0)
+      -- skin layers
+      :byte(17):varint(0):byte(player.skin.layers)
+      -- main hand
+      :byte(18):varint(0):byte(player.skin.hand)
+      :byte(0xff))
+
+    -- start listening to the player's connection (unless it's ourselves)
+    if player ~= self.player then
+      player.connection:add_listener(self)
+    end
   end
   self:send(PLAY_clientbound.player_info_update, buffer)
 end
@@ -352,9 +370,10 @@ function Connection:remove_listener(con)
   util.remove_value(self.listening_connections, con)
 end
 
--- Respawns the player, used both when they are dead to respawn them, as well as when changing dimensions (the dimension must be changed before calling this function).
----@param data_kept integer  Bit mask. 0x01: Keep attributes, 0x02: Keep metadata.
-function Connection:respawn(data_kept)
+-- Respawns the player, used both when they are dead to respawn them, as well as when changing dimensions (`player.dimension` must be changed before calling this function).
+---@param data_kept integer           Bit mask. 0x01: Keep attributes, 0x02: Keep metadata (includes potion effects).
+---@param changing_dimension boolean  true if changing the dimension the player is in; must be set for the loading screen to close correctly
+function Connection:respawn(data_kept, changing_dimension)
   local dim = self.player.dimension
   self:send(PLAY_clientbound.respawn, SendBuffer()
     :varint(Registry.dimension_type[dim.type])                       -- starting dim type (registry id)
@@ -364,6 +383,9 @@ function Connection:respawn(data_kept)
     :varint(0)                                                       -- portal cooldown (unknown use)
     :byte(data_kept)                                                 -- normal respawns keep no data, dimension changes keep all, end portal only keeps attributes
   )
+  if changing_dimension then                                         -- must be sent before chunks for the new dimension
+    self:send(PLAY_clientbound.game_event, SendBuffer():byte(13):int(0))
+  end
 end
 
 -- Sets the center chunk around which loaded chunks can be sent, and chunks outside get unloaded. <br>
@@ -450,17 +472,17 @@ end
 ---@param self Connection
 ---@param username string
 ---@param uuid uuid
----@param texture? {value: string, signature: string?}
-function Connection:_finish_login(username, uuid, texture)
+---@param skin? {texture: string, texture_signature: string?}
+function Connection:_finish_login(username, uuid, skin)
   local accept, message = Server.on_login(username, self.encrypted and uuid or nil)
   if not accept then
     self:disconnect(message or "Login refused")
     return
   end
 
-  self.player = Player._new(username, uuid, self, texture)
+  self.player = Player._new(username, uuid, self, skin)
 
-  log("login finish: '%s' (%s), %q", username, util.UUID_to_string(uuid), texture ~= nil)
+  log("login finish: '%s' (%s), %q", username, util.UUID_to_string(uuid), skin ~= nil)
   -- Send login success (corresponds to "Joining world..." on the client connection screen)
   -- it appears that sending the player's skin (texture) property in the login packet has no effect
   -- and it must be sent in the player list info update for the player's own info instead
@@ -555,14 +577,14 @@ function Connection:handle_packet_login(packet_id)
     -- read the session server response to get the player's cannonical username, uuid, & skin data
     local auth_uuid = util.string_to_UUID(data.id)
     local auth_username = data.name        -- the session server request parameter is case-insensitive, use the response to prevent clients from changing the capitalization of their name
-    local texture
+    local skin
     for _, v in pairs(data.properties) do  -- i'm not sure when properties would ever have anything else, but just in case
       if v.name == "textures" then
-        texture = { value = v.value, signature = v.signature }
+        skin = { texture = v.value, texture_signature = v.signature }
       end
     end
 
-    self:_finish_login(auth_username, auth_uuid, texture)
+    self:_finish_login(auth_username, auth_uuid, skin)
 
     -- only valid to receive AFTER we've sent the game_profile packet
   elseif packet_id == LOGIN_serverbound.login_acknowledged and self.state == STATE_LOGIN_WAIT_ACK then
@@ -620,8 +642,11 @@ function Connection:handle_packet_configuration(packet_id)
     --
   elseif packet_id == CONFIGURATION_serverbound.client_information then
     local locale, view_distance, chat_mode, chat_colors = self.buffer:string(), self.buffer:byte(), self.buffer:varint(), self.buffer:boolean()
+    local skin_layers, main_hand = self.buffer:byte(), self.buffer:varint()
     self.buffer:read_to_end()
-    log("client information (configuration): %s %i %i %q", locale, view_distance, chat_mode, chat_colors)
+    log("client information (configuration): %s, %i, %i, %q, %02x, %i", locale, view_distance, chat_mode, chat_colors, skin_layers, main_hand)
+    self.player.skin.layers = skin_layers & 0x7F       -- mask off unused bit
+    self.player.skin.hand = main_hand == 0 and 0 or 1  -- ensure it's only 0 or 1 (default 1; right hand)
 
     --
   elseif packet_id == CONFIGURATION_serverbound.custom_payload then
@@ -733,8 +758,29 @@ function Connection:handle_packet_play(packet_id)
     --
   elseif packet_id == PLAY_serverbound.client_information then
     local locale, view_distance, chat_mode, chat_colors = self.buffer:string(), self.buffer:byte(), self.buffer:varint(), self.buffer:boolean()
+    local skin_layers, main_hand = self.buffer:byte(), self.buffer:varint()
     self.buffer:read_to_end()
-    log("client information (configuration): %s %i %i %q", locale, view_distance, chat_mode, chat_colors)
+    log("client information (play): %s, %i, %i, %q, %02x, %i", locale, view_distance, chat_mode, chat_colors, skin_layers, main_hand)
+
+    local skin = self.player.skin
+    if skin_layers ~= skin.layers or main_hand ~= skin.hand then
+      log("updating skin layers")
+      skin.layers = skin_layers & 0x7F       -- mask off unused bit
+      skin.hand = main_hand == 0 and 0 or 1  -- ensure it's only 0 or 1 (default 1; right hand)
+      -- send the packet to all listeners & ourselves
+      self:send_to_all_listeners(PLAY_clientbound.set_entity_data, SendBuffer():varint(self.player.id)
+        -- skin layers
+        :byte(17):varint(0):byte(skin.layers)
+        -- main hand
+        :byte(18):varint(0):byte(skin.hand)
+        :byte(0xff))
+      self:send(PLAY_clientbound.set_entity_data, SendBuffer():varint(0)  -- client's player entity is 0
+        -- skin layers
+        :byte(17):varint(0):byte(skin.layers)
+        -- main hand
+        :byte(18):varint(0):byte(skin.hand)
+        :byte(0xff))
+    end
 
     --
   elseif packet_id == PLAY_serverbound.custom_payload then
@@ -1010,7 +1056,6 @@ local mt = {
 ---@param sock LuaSocket
 ---@return Connection
 local function new(sock)
-  ---@type Connection
   local self = {
     sock = sock,
     buffer = ReceiveBuffer(),

@@ -5,6 +5,10 @@
   file, You can obtain one at http://mozilla.org/MPL/2.0/.
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
+
+  The Covered Software may not be used as training or other input data
+  for LLMs, generative AI, or other forms of machine learning or neural
+  networks.
 ]]
 
 local Vector3 = require "Vector3"
@@ -12,7 +16,7 @@ local Vector3 = require "Vector3"
 ---@class Player : Entity
 ---@field username string
 ---@field uuid uuid
----@field texture {value: string, signature: string?}
+---@field skin {texture: string?, texture_signature: string?, layers: integer, hand: 0|1}
 ---@field inventory table<integer, Item>
 ---@field selected_slot integer  0-8
 ---@field connection Connection
@@ -108,7 +112,7 @@ end
 function Player:transfer_dimension(new_dimension)
   self.dimension:_remove_player(self)
   self.dimension = new_dimension
-  self.connection:respawn(3)
+  self.connection:respawn(3, true)
   self.dimension:_add_player(self)
 end
 
@@ -116,9 +120,9 @@ end
 ---@param username string
 ---@param uuid uuid         The player's UUID in binary form.
 ---@param con Connection
----@param texture? {value: string, signature: string?}
+---@param skin? {texture: string, texture_signature: string?}
 ---@return Player
-function Player._new(username, uuid, con, texture)
+function Player._new(username, uuid, con, skin)
   local self = {
     type = "minecraft:player",  -- for Entity
     position = Vector3.new(),
@@ -129,7 +133,7 @@ function Player._new(username, uuid, con, texture)
     last_sync_yaw = 0,
     username = username,
     uuid = uuid,
-    texture = texture,
+    skin = { layers = 0, hand = 1, texture = skin and skin.texture, texture_signature = skin and skin.texture_signature },
     inventory = {},
     selected_slot = 0,
     connection = con,

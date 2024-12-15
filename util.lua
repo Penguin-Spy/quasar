@@ -56,7 +56,7 @@ end
 ---@param uuid_str string
 ---@return uuid
 function util.string_to_UUID(uuid_str)
-  return ((uuid_str:gsub("%-", "")):gsub("%x%x", function(chars) return string.char(tonumber(chars, 16)) end))
+  return (uuid_str:gsub("%-", ""):gsub("%x%x", function(chars) return string.char(tonumber(chars, 16)) end))
 end
 
 -- Loads the contents of a JSON file as a Lua table.
