@@ -22,8 +22,10 @@ local Vector3 = require "Vector3"
 ---@field connection Connection
 ---@field dimension Dimension
 ---@field on_ground boolean     True if the client thinks it's on the ground
+---@field against_wall boolean  True if the client thinks it's pushed against a wall
 ---@field sneaking boolean      True if the client intends to be sneaking
 ---@field sprinting boolean     True if the client intends to be sprinting
+---@field input number          The player's current input, see https://minecraft.wiki/w/Java_Edition_protocol#Player_Input
 ---@field block_position Vector3
 ---@field chunk_position Vector3
 local Player = {}
@@ -138,8 +140,10 @@ function Player._new(username, uuid, con, skin)
     selected_slot = 0,
     connection = con,
     on_ground = false,
+    against_wall = false,
     sneaking = false,
     sprinting = false,
+    input = 0,
     block_position = Vector3.new(),
     chunk_position = Vector3.new()
   }

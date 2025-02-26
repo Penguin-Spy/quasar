@@ -12,7 +12,7 @@ local util = require "util"
 
 local Registry = {}
 
-local registries_data = util.read_json("registries.json")
+local registries_data = util.read_json("data/registries.json")
 
 --
 ---@param registry_id identifier
@@ -233,12 +233,13 @@ local damage_types = {
   "minecraft:unattributed_fireball",
   "minecraft:wind_charge",
   "minecraft:wither",
-  "minecraft:wither_skull"
+  "minecraft:wither_skull",
+  "minecraft:ender_pearl"
 }
 
 -- these are missing vanilla values
 local banner_patterns = { "minecraft:base", "minecraft:border" }
-local encahntments = { "minecraft:aqua_affinity" }
+local encahntments = {}--{ "minecraft:unbreaking" }
 local jukebox_songs = { "minecraft:blocks" }
 
 Registry.network_data = {
