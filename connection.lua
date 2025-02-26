@@ -29,6 +29,8 @@ local Server
 -- only require "openssl.cipher",  "openssl.digest", and "openssl.bignum" if the server has encryption enabled
 local cipher, digest, bn
 
+local server_version <const>, server_protocol <const> = "1.21.4", 769
+
 ---@class openssl.cipher
 ---@field update fun(self:openssl.cipher, data:string):string, string?
 
@@ -419,7 +421,7 @@ end
 -- Sets the state of the Connection
 ---@param state state
 function Connection:set_state(state)
-  self.handle_packet = packet_handlers[self.state]
+  self.handle_packet = packet_handlers[state]
   self.state = state
 end
 
@@ -437,6 +439,9 @@ handle(STATE_HANDSHAKE, "intention", function (self)
     self:set_state(STATE_STATUS)
   elseif next_state == 2 then
     self:set_state(STATE_LOGIN)
+    if protocol_id ~= server_protocol then
+     self:disconnect{ translate = "multiplayer.disconnect.outdated_client", with = { server_version } }
+    end
   else  -- can't accept transfer logins (yet?)
     self:set_state(STATE_LOGIN)
     self:disconnect{ translate = "multiplayer.disconnect.transfers_disabled" }
@@ -447,7 +452,7 @@ end)
 --= status state packet handlers =--
 
 local status_response = json.encode{
-  version = { name = "1.21.4", protocol = 769 },
+  version = { name = server_version, protocol = server_protocol },
   players = { max = 0, online = 2 },
   description = { text = "woah haiii :3" },
   enforcesSecureChat = false,
@@ -597,8 +602,8 @@ handle(STATE_LOGIN_WAIT_ACK, "login_acknowledged", function (self)
   self:send("server_links", SendBuffer():varint(1):byte(1):varint(0):string("https://github.com/Penguin-Spy/quasar/issues"))
   -- send feature flags packet (enable vanilla features (not required for registry sync/client to connect, but probably important))
   self:send("update_enabled_features", SendBuffer():varint(1):string("minecraft:vanilla"))
-  -- start datapack negotiation (official server declares the "minecraft:core" datapack with version "1.21.1")
-  self:send("select_known_packs", SendBuffer():varint(1):string("minecraft"):string("core"):string("1.21.4"))
+  -- start datapack negotiation (official server declares the "minecraft:core" datapack with the server version)
+  self:send("select_known_packs", SendBuffer():varint(1):string("minecraft"):string("core"):string(server_version))
 end)
 
 
@@ -608,12 +613,17 @@ end)
 handle(STATE_CONFIGURATION, "select_known_packs", function (self)
   local client_known_pack_count = self.buffer:varint()
   log("serverbound known packs (known on the client): %i", client_known_pack_count)
-  -- TODO: validate that the client does actually know about minecraft:core with version 1.21
+  -- validate that the client does actually know about minecraft:core with the correct version
+  local client_known_packs = {}
   for i = 1, client_known_pack_count do
     local pack_namespace = self.buffer:string()
     local pack_id = self.buffer:string()
     local pack_version = self.buffer:string()
     log("  client knows pack %s:%s of version %s", pack_namespace, pack_id, pack_version)
+    client_known_packs[pack_namespace .. ":" .. pack_id] = pack_version
+  end
+  if client_known_packs["minecraft:core"] ~= server_version then
+    self:disconnect{ translate = "multiplayer.disconnect.outdated_client", with = { server_version } }
   end
 
   -- send registry data
