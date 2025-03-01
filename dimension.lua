@@ -173,8 +173,7 @@ end
 ---@return Chunk|nil chunk
 function Dimension:get_chunk(chunk_x, chunk_z, player)
   local cx = self.chunks[chunk_x]
-  if not cx then return end
-  return cx[chunk_z]
+  return cx and cx[chunk_z]
 end
 
 -- Spawns the player into the dimension, adding their player entity & raising `on_player_join`.
@@ -209,7 +208,7 @@ function Dimension:_add_player(player)
 
   -- send chunks to the player
   local pos = player.position
-  self:_on_player_changed_chunk(player, pos.x // 16, pos.y // 16, pos.z // 16, true)
+  self:_on_player_changed_chunk(player, pos.x // 16, pos.z // 16, true)
   -- resync position in case the client fell into the void while loading chunks
   player.connection:synchronize_position()
 end
@@ -242,26 +241,20 @@ function Dimension:_on_player_moved(player)
 
     local cx, cy, cz = pos.x // 16, pos.y // 16, pos.z // 16
     local cpos = player.chunk_position
-    if cx ~= cpos.x or cy ~= cpos.y or cz ~= cpos.z then
-      self:_on_player_changed_chunk(player, cx, cy, cz)
+    if cx ~= cpos.x or cz ~= cpos.z then
+      self:_on_player_changed_chunk(player, cx, cz)
     end
+    cpos:set(cx, cy, cz)
   end
 end
 
 -- Handles sending chunks to the client; you generally don't need to change this.
 ---@param player Player
 ---@param cx integer The new chunk x
----@param cy integer The new chunk y
 ---@param cz integer The new chunk z
 ---@param load_all boolean? If true, all chunks in the view distance will be sent to the client (i.e. when first joining the dimension)
-function Dimension:_on_player_changed_chunk(player, cx, cy, cz, load_all)
+function Dimension:_on_player_changed_chunk(player, cx, cz, load_all)
   local cpos = player.chunk_position
-
-  -- skip loading if only the Y changed
-  if cx == cpos.x and cz == cpos.z and not load_all then
-    cpos:set(cx, cy, cz)
-    return
-  end
 
   player.connection:send_set_center_chunk(cx, cz)
   local r = self.view_distance + 3  -- extra 3 chunks is from `2r+7`
@@ -277,8 +270,6 @@ function Dimension:_on_player_changed_chunk(player, cx, cy, cz, load_all)
       end
     end
   end
-
-  cpos:set(cx, cy, cz)
 end
 
 -- Creates a new Dimension. You should not call this function yourself, instead use `Server.create_dimension`!

@@ -15,7 +15,8 @@ local SendBuffer = require 'SendBuffer'
 ---@class Chunk.subchunk
 ---@field block_count integer
 ---@field bits_per_entry integer
----@field palette integer[]
+---@field palette {[integer]:integer}           Map from palette index (0-based index) to block state
+---@field palette_contents {[integer]:integer}  Map from block state to palette index
 ---@field data integer[]
 
 ---@class Chunk
@@ -23,13 +24,59 @@ local SendBuffer = require 'SendBuffer'
 local Chunk = {}
 
 
+-- increases the bits_per_entry by 1 and reshuffles data to fit
+local function expand_subchunk_palette(subchunk)
+  local old_bits_per_entry = subchunk.bits_per_entry
+  local old_entries_per_long = 64 // old_bits_per_entry
+  local old_data = subchunk.data
+
+  local new_bits_per_entry = old_bits_per_entry + 1
+  local new_entries_per_long = 64 // new_bits_per_entry
+  local new_data = {}
+
+  local old_mask = ((1 << old_bits_per_entry)-1)
+  for entry = 0, 4095 do
+    local old_long_index = (entry // old_entries_per_long) + 1
+    local old_long_offset = (entry % old_entries_per_long) * old_bits_per_entry
+    local new_long_index = (entry // new_entries_per_long) + 1
+    local new_long_offset = (entry % new_entries_per_long) * new_bits_per_entry
+
+    local palette_entry = old_data[old_long_index] & (old_mask << old_long_offset)
+
+    new_data[new_long_index] = (new_data[new_long_index] or 0) | (palette_entry << new_long_offset)
+  end
+
+  subchunk.data = new_data
+  subchunk.bits_per_entry = new_bits_per_entry
+end
+
 
 ---@param pos blockpos    The absolute position in the world (this method converts to the position in the chunk internally)
 ---@param state integer   The block state ID to set at the position
 function Chunk:set_block(pos, state)
   local subchunk = self.subchunks[(pos.y // 16) + 5]                      -- todo: adjust for bottom of world not always being at y=0
-  local yz, x = ((pos.y % 16) * 16) + (pos.z % 16) + 1, (pos.x % 16) * 4  -- the +1 of yz is because Lua list indexes start at 1
-  subchunk.data[yz] = subchunk.data[yz] & ~(0xf << x) | (state << x)
+
+  -- ensure the state is in the palette
+  if not subchunk.palette_contents[state] then
+    -- add to palette
+    table.insert(subchunk.palette, state)
+    subchunk.palette_contents[state] = #subchunk.palette
+    -- expand if necessary
+    if #subchunk.palette + 1 > 1<<subchunk.bits_per_entry then
+      expand_subchunk_palette(subchunk)
+    end
+  end
+
+  local palette_entry = subchunk.palette_contents[state]
+
+  local entries_per_long = 64 // subchunk.bits_per_entry
+  local entry = (pos.x%16) + (pos.z%16)*16 + (pos.y%16)*256                 -- index of the entry for this block position
+  local long_index = (entry // entries_per_long) + 1                        -- index of the long for the entry (+1 for Lua indexing)
+  local long_offset = (entry % entries_per_long) * subchunk.bits_per_entry  -- offset of bits into the long
+
+  subchunk.data[long_index] = subchunk.data[long_index]
+    & ~(((1 << subchunk.bits_per_entry)-1) << long_offset)
+    | (palette_entry << long_offset)
 end
 
 
@@ -42,9 +89,9 @@ function Chunk:get_data()
     buffer:short(16 * 16 * 16)            -- block count
 
     buffer:byte(subchunk.bits_per_entry)  -- block palette bits per entry
-    buffer:varint(#subchunk.palette)      -- # of palette entries
-    for _, palette_entry in pairs(subchunk.palette) do
-      buffer:varint(palette_entry)
+    buffer:varint(#subchunk.palette + 1)      -- # of palette entries
+    for i = 0, #subchunk.palette do
+      buffer:varint(subchunk.palette[i])
     end
 
     buffer:varint(#subchunk.data)  -- size of data array
@@ -67,7 +114,7 @@ local function new(height)
   local subchunks = {}
   for i = 1, height do
     local data = {}
-    for j = 1, 16 * 16 do  -- array of 256 Longs (data_size_as_longs)
+    for j = 1, 16 * 16 do  -- array of 256 Longs
       if i <= 8 then
         -- each Long is a line of 16 blocks along the X axis
         data[j] = ((j % 16) > 1) and 0x0111111111111110 or 0x2000000000000002
@@ -75,20 +122,22 @@ local function new(height)
         data[j] = 0
       end
     end
-    table.insert(subchunks, {
+    ---@type Chunk.subchunk
+    local subchunk = {
       block_count = 0,
-      bits_per_entry = 4,            --always 4 for now
-      palette = { 0, 1, 2, 3, 4, 5, 6, 7, 15, 16, 17, 18, 19, 20, 21, 22 },
-      data_size_as_longs = 16 * 16,  -- compute from bits_per_entry
+      bits_per_entry = 4,
+      palette = { [0] = 0, 1, 2, 3, 4, 5, 6, 7, 15, 16, 17, 18, 19, 20, 21, 22, 23 },
+      palette_contents = {},
       data = data
-    })
+    }
+    for index, state in pairs(subchunk.palette) do
+      subchunk.palette_contents[state] = index
+    end
+    table.insert(subchunks, subchunk)
   end
-  ---@type Chunk
-  local self = {
+  return setmetatable({
     subchunks = subchunks
-  }
-  setmetatable(self, { __index = Chunk })
-  return self
+  }, { __index = Chunk })
 end
 
 -- Precomputes and creates a chunk object that is entirely air.
