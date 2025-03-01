@@ -10,7 +10,7 @@
   defined by the Mozilla Public License, v. 2.0.
 ]]
 
-local SendBuffer = require 'SendBuffer'
+local SendBuffer = require 'quasar.SendBuffer'
 
 ---@class Chunk.subchunk
 ---@field block_count integer

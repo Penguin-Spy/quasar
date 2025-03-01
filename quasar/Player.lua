@@ -11,7 +11,7 @@
   networks.
 ]]
 
-local Vector3 = require "Vector3"
+local Vector3 = require "quasar.Vector3"
 
 ---@class Player : Entity
 ---@field username string

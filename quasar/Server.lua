@@ -14,10 +14,11 @@
 local copas = require "copas"
 local copas_timer = require "copas.timer"
 local socket = require "socket"
-local Connection = require "connection"
-local Dimension = require "dimension"
-local util = require "util"
-local log = require "log"
+
+local Connection = require "quasar.Connection"
+local Dimension = require "quasar.Dimension"
+local util = require "quasar.util"
+local log = require "quasar.log"
 
 ---@alias identifier string                                     A Minecraft identifier, in the form of `"namespace:thing"`
 ---@alias uuid       string                                     A UUID in binary form.

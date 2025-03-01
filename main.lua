@@ -10,9 +10,9 @@
 -- we redefine fields to set the event handlers
 ---@diagnostic disable: duplicate-set-field
 
-local Server = require "Server"
-local log = require "log"
-local util = require "util"
+local Server = require "quasar.Server"
+local log = require "quasar.log"
+local util = require "quasar.util"
 
 local overworld = Server.create_dimension("minecraft:overworld")
 function overworld:on_break_block(player, pos)
@@ -113,6 +113,20 @@ function the_nether:on_command(player, command)
     end
   elseif c[1] == "disconnect" then
     player.connection:disconnect("bye")
+  elseif c[1] == "lua" then
+    local env = setmetatable({
+      player = player,
+      Server = Server,
+      print = function (...) player:send_system_message(table.concat(table.pack(...), " ")) end
+    }, {__index=_ENV})
+    local f, err = load(command:sub(5), "/lua[" .. player.username .. "]", "t", env)
+    if not f then
+      return player:send_system_message(err or "unknown load error")
+    end
+    local success, err = pcall(f)
+    if not success then
+      player:send_system_message(err or "unknown run error")
+    end
   else
     player:send_system_message('what no')
   end

@@ -7,12 +7,12 @@
   defined by the Mozilla Public License, v. 2.0.
 ]]
 
-local SendBuffer = require "SendBuffer"
-local util = require "util"
+local SendBuffer = require "quasar.SendBuffer"
+local util = require "quasar.util"
 
 local Registry = {}
 
-local registries_data = util.read_json("data/registries.json")
+local registries_data = util.read_json("quasar/data/registries.json")
 
 --
 ---@param registry_id identifier

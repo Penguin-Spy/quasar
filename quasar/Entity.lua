@@ -7,9 +7,9 @@
   defined by the Mozilla Public License, v. 2.0.
 ]]
 
-local util = require "util"
-local registry = require "registry"
-local Vector3 = require "Vector3"
+local util = require "quasar.util"
+local Registry = require "quasar.Registry"
+local Vector3 = require "quasar.Vector3"
 
 ---@class Entity
 ---@field id number
@@ -32,7 +32,7 @@ local Entity = {}
 ---@param uuid uuid?
 ---@return Entity
 function Entity._new(id, entity_type, pos, uuid)
-  if type(registry.entity_types[entity_type]) ~= "number" then
+  if type(Registry.entity_types[entity_type]) ~= "number" then
     error("invalid entity type '" .. tostring(entity_type) .. "'")
   end
   ---@type Entity

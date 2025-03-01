@@ -8,11 +8,11 @@
   defined by the Mozilla Public License, v. 2.0.
 ]]
 
-local log = require "log"
-local util = require "util"
-local Vector3 = require "Vector3"
-local Entity = require "entity"
-local Chunk = require 'chunk'
+local log = require "quasar.log"
+local util = require "quasar.util"
+local Vector3 = require "quasar.Vector3"
+local Entity = require "quasar.Entity"
+local Chunk = require 'quasar.Chunk'
 
 ---@class Dimension
 ---@field timer table?  Copas timer for dimension ticking

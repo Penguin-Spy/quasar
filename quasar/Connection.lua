@@ -15,14 +15,14 @@ local json = require 'lunajson'
 local copas_timer = require 'copas.timer'
 local http = require 'copas.http'
 
-local ReceiveBuffer = require "ReceiveBuffer"
-local SendBuffer = require 'SendBuffer'
-local log = require "log"
-local util = require "util"
-local Registry = require "registry"
-local NBT = require "nbt"
-local Player = require "player"
-local Item = require "item"
+local ReceiveBuffer = require "quasar.ReceiveBuffer"
+local SendBuffer = require 'quasar.SendBuffer'
+local log = require "quasar.log"
+local util = require "quasar.util"
+local Registry = require "quasar.Registry"
+local NBT = require "quasar.NBT"
+local Player = require "quasar.Player"
+local Item = require "quasar.Item"
 
 ---@class Server
 local Server
@@ -75,7 +75,7 @@ local STATE_CLOSED <const> = 8
 ---@type {[state]:{[string]:integer}}, {[state]:{[string]:integer}}
 local clientbound_packet_id, serverbound_packet_id = {}, {}
 do
-  local packets = util.read_json("data/packets.json")
+  local packets = util.read_json("quasar/data/packets.json")
   ---@return {[string]: integer}
   local function flatten(t)
     local t2 = {}
