@@ -1,4 +1,4 @@
---[[ nbt.lua © Penguin_Spy 2024
+--[[ NBT.lua © Penguin_Spy 2024
 
   This Source Code Form is subject to the terms of the Mozilla Public
   License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -14,6 +14,7 @@ local string_char = string.char
 local string_byte = string.byte
 local string_sub = string.sub
 local string_pack = string.pack
+local string_unpack = string.unpack
 
 ---@param value any
 ---@return string
@@ -91,6 +92,86 @@ function NBT.list(items)
     buf = buf .. string_sub(item, 2)
   end
   return buf
+end
+
+
+local parse_payload
+
+-- parses the payload of a TAG_Compound
+---@param data string     the raw data
+---@param offset integer  where to start reading the payload from
+---@return table payload, integer offset
+local function parse_compound_payload(data, offset)
+  local compound = {}
+  local tag, name, payload
+  while true do
+    tag, offset = string_unpack(">I1", data, offset)
+    if tag == 0 then break end -- TAG_End has no name or payload
+    name, offset = string_unpack(">s2", data, offset)
+    payload, offset = parse_payload(tag, data, offset)
+    compound[name] = payload
+  end
+  return compound, offset
+end
+
+-- parses the payload of a TAG_List, TAG_Int_Array, or TAG_Long_Array
+---@param tag integer     the type of tags in the list
+---@param data string     the raw data
+---@param offset integer  where to start reading the payload from
+---@return table payload, integer offset
+local function parse_list_payload(tag, data, offset)
+  local list, length = {}, nil
+  length, offset = string_unpack(">i4", data, offset)
+  for i = 1, length do
+    list[i], offset = parse_payload(tag, data, offset)
+  end
+  return list, offset
+end
+
+-- parses the payload of an NBT tag
+---@param tag integer the NBT tag type
+---@param data string     the raw data
+---@param offset integer  where to start reading the payload from
+---@return any payload, integer offset
+function parse_payload(tag, data, offset)
+  if tag == 1 then
+    return string_unpack(">i1", data, offset)
+  elseif tag == 2 then
+    return string_unpack(">i2", data, offset)
+  elseif tag == 3 then
+    return string_unpack(">i4", data, offset)
+  elseif tag == 4 then
+    return string_unpack(">i8", data, offset)
+  elseif tag == 5 then
+    return string_unpack(">f", data, offset)
+  elseif tag == 6 then
+    return string_unpack(">d", data, offset)
+  elseif tag == 8 then
+    return string_unpack(">s2", data, offset)
+  elseif tag == 9 then
+    local list_tag = string_byte(data, offset)
+    return parse_list_payload(list_tag, data, offset + 1)
+  elseif tag == 10 then
+    return parse_compound_payload(data, offset)
+  elseif tag == 11 then
+    return parse_list_payload(3, data, offset)
+  elseif tag == 12 then
+    return parse_list_payload(4, data, offset)
+  else
+    error(string.format("unknown NBT tag type: %i at offset %i", tag, offset))
+  end
+end
+
+-- parses an uncompressed NBT compound
+---@param data string       the raw data
+---@param offset integer    where to start reading
+---@param skip_name boolean true if there is no name for the root compound
+---@return table compound   the parsed NBT data
+---@return integer offset   the index of the first unread byte of `data`
+function NBT.parse(data, offset, skip_name)
+  assert(string_byte(data, offset) == 10, "NBT data must start with a TAG_Compound")
+  local name_length = skip_name and 0 or (2 + string_unpack(">I2", data, offset + 1))
+  return parse_compound_payload(data, offset + 1 + name_length)
 end
 
 return NBT
