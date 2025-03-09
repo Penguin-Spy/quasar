@@ -24,6 +24,10 @@ local NBT = require "quasar.NBT"
 local Player = require "quasar.Player"
 local Item = require "quasar.Item"
 
+local dimension_type_registry = Registry.get_map("minecraft:dimension_type")
+local entity_type_registry = Registry.get_map("minecraft:entity_type")
+local chat_type_registry = Registry.get_map("minecraft:chat_type")
+
 ---@class Server
 local Server
 -- only require "openssl.cipher",  "openssl.digest", and "openssl.bignum" if the server has encryption enabled
@@ -75,35 +79,27 @@ local STATE_CLOSED <const> = 8
 ---@type {[state]:{[string]:integer}}, {[state]:{[string]:integer}}
 local clientbound_packet_id, serverbound_packet_id = {}, {}
 do
-  local packets = util.read_json("quasar/data/packets.json")
-  ---@return {[string]: integer}
-  local function flatten(t)
-    local t2 = {}
-    for k, v in pairs(t) do
-      t2[k:gsub("minecraft:", "")] = v.protocol_id
-    end
-    return t2
-  end
+  local packets = require "quasar.data.packets"
 
-  serverbound_packet_id[STATE_HANDSHAKE] = flatten(packets.handshake.serverbound)
+  serverbound_packet_id[STATE_HANDSHAKE] = packets.handshake.serverbound
 
-  serverbound_packet_id[STATE_STATUS] = flatten(packets.status.serverbound)
-  clientbound_packet_id[STATE_STATUS] = flatten(packets.status.clientbound)
+  serverbound_packet_id[STATE_STATUS] = packets.status.serverbound
+  clientbound_packet_id[STATE_STATUS] = packets.status.clientbound
 
-  serverbound_packet_id[STATE_LOGIN] = flatten(packets.login.serverbound)
+  serverbound_packet_id[STATE_LOGIN] = packets.login.serverbound
   serverbound_packet_id[STATE_LOGIN_WAIT_ENCRYPT] = serverbound_packet_id[STATE_LOGIN]
   serverbound_packet_id[STATE_LOGIN_WAIT_ACK] = serverbound_packet_id[STATE_LOGIN]
-  clientbound_packet_id[STATE_LOGIN] = flatten(packets.login.clientbound)
+  clientbound_packet_id[STATE_LOGIN] = packets.login.clientbound
   clientbound_packet_id[STATE_LOGIN_WAIT_ENCRYPT] = clientbound_packet_id[STATE_LOGIN]
   clientbound_packet_id[STATE_LOGIN_WAIT_ACK] = clientbound_packet_id[STATE_LOGIN]
 
-  serverbound_packet_id[STATE_CONFIGURATION] = flatten(packets.configuration.serverbound)
+  serverbound_packet_id[STATE_CONFIGURATION] = packets.configuration.serverbound
   serverbound_packet_id[STATE_CONFIGURATION_WAIT_ACK] = serverbound_packet_id[STATE_CONFIGURATION]
-  clientbound_packet_id[STATE_CONFIGURATION] = flatten(packets.configuration.clientbound)
+  clientbound_packet_id[STATE_CONFIGURATION] = packets.configuration.clientbound
   clientbound_packet_id[STATE_CONFIGURATION_WAIT_ACK] = clientbound_packet_id[STATE_CONFIGURATION]
 
-  serverbound_packet_id[STATE_PLAY] = flatten(packets.play.serverbound)
-  clientbound_packet_id[STATE_PLAY] = flatten(packets.play.clientbound)
+  serverbound_packet_id[STATE_PLAY] = packets.play.serverbound
+  clientbound_packet_id[STATE_PLAY] = packets.play.clientbound
 end
 
 ---@type {[state]:{[integer]:fun(self:Connection)}}
@@ -257,15 +253,13 @@ function Connection:send_block(pos, state)
 end
 
 -- Sends a chat message to the client.
----@param type registry.chat_type  The chat type
----@param sender string   The name of the one sending the message
----@param content string  The content of the message
----@param target string?  Optional target of the message, used in some chat types
-function Connection:send_chat_message(type, sender, content, target)
-  log("sending chat message of type %q from %q with target %q and content %q", type, sender, target, content)
-  --TODO: resolving of registry types for chat_type.
-  -- also chat type here appears to be indexed starting at 1? instead of 0 like other registries
-  local buffer = SendBuffer():raw(NBT.string(content)):varint(1):raw(NBT.string(sender))
+---@param chat_type identifier  The chat type
+---@param sender string         The name of the one sending the message
+---@param content string        The content of the message
+---@param target string?        Optional target of the message, used in some chat types
+function Connection:send_chat_message(chat_type, sender, content, target)
+  -- chat type here appears to be indexed starting at 1? instead of 0 like other registries
+  local buffer = SendBuffer():raw(NBT.string(content)):varint(chat_type_registry[chat_type] + 1):raw(NBT.string(sender))
   if target then
     buffer:boolean(true):raw(NBT.string(target))
   else
@@ -325,7 +319,7 @@ end
 -- Informs the client that the specified entity spawned
 ---@param entity Entity
 function Connection:add_entity(entity)
-  local type_id = Registry.entity_types[entity.type]
+  local type_id = entity_type_registry[entity.type]
   local yaw, pitch = send_facing(entity.yaw, entity.pitch)
   self:send("add_entity", SendBuffer():varint(entity.id):raw(entity.uuid):varint(type_id)
     :pack(">dddBBB", entity.position.x, entity.position.y, entity.position.z, pitch, yaw, yaw)  -- xyz, pitch yaw head_yaw
@@ -396,7 +390,7 @@ end
 function Connection:respawn(data_kept, changing_dimension)
   local dim = self.player.dimension
   self:send("respawn", SendBuffer()
-    :varint(Registry.dimension_type[dim.type])                       -- starting dim type (registry id)
+    :varint(dimension_type_registry[dim.type])                       -- starting dim type (registry id)
     :string(dim.identifier)                                          -- starting dim name
     :long(0)                                                         -- hashed seeed
     :byte(1):byte(255):boolean(false):boolean(false):boolean(false)  -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
@@ -627,18 +621,10 @@ handle(STATE_CONFIGURATION, "select_known_packs", function (self)
   end
 
   -- send registry data
-  local regs = Registry.network_data
-  self:send("registry_data", regs["worldgen/biome"])
-  self:send("registry_data", regs.chat_type)
-  self:send("registry_data", regs.trim_pattern)
-  self:send("registry_data", regs.trim_material)
-  self:send("registry_data", regs.wolf_variant)
-  self:send("registry_data", regs.painting_variant)
-  self:send("registry_data", regs.dimension_type)
-  self:send("registry_data", regs.damage_type)
-  self:send("registry_data", regs.banner_pattern)
-  self:send("registry_data", regs.enchantment)
-  self:send("registry_data", regs.jukebox_song)
+  for _, registry in pairs(Registry.get_network_data()) do
+    send_raw(self, registry)
+  end
+  send_raw(self, Registry.get_network_tags())
 
   self:send("finish_configuration", SendBuffer())  -- then tell client we're finished with configuration, u can ack when you're done sending stuff
   self:set_state(STATE_CONFIGURATION_WAIT_ACK)
@@ -685,7 +671,7 @@ handle(STATE_CONFIGURATION_WAIT_ACK, "finish_configuration", function (self)
     :varint(0)                                                       -- "max players" (unused)
     :varint(dim.view_distance):varint(5)                             -- view dist, sim dist
     :boolean(false):boolean(true):boolean(false)                     -- reduced debug, respawn screen, limited crafting
-    :varint(Registry.dimension_type[dim.type])                       -- starting dim type (registry id)
+    :varint(dimension_type_registry[dim.type])                       -- starting dim type (registry id)
     :string(dim.identifier)                                          -- starting dim name
     :long(0)                                                         -- hashed seeed
     :byte(1):byte(255):boolean(false):boolean(false):boolean(false)  -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
@@ -738,14 +724,12 @@ end)
 
 handle(STATE_PLAY, "chat", function (self)
   local message = self.buffer:string()
-  local timestamp = self.buffer:dump(8); self.buffer:read(8)
-  local salt = self.buffer:dump(8); self.buffer:read(8)  -- discard what we just dumped
-  local has_signature = self.buffer:boolean()
   self.buffer:read_to_end()
-  log("chat msg from '%s' at %s salt %s signed %q: %s", self.player.username, timestamp, salt, has_signature, message)
+  log("[CHAT] <%s> %s", self.player.username, message)
 
   if #message > 256 then
-    error("received too long chat message")
+    self:disconnect{translate = "argument.message.too_long", with = {tostring(#message), "256"}}
+    return
   end
 
   self.player:on_chat_message(message)

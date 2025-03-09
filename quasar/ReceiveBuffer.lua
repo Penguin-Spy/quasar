@@ -115,7 +115,7 @@ end
 function ReceiveBuffer:string()
   local length, bytes = varint(self.data)
   if not length then error("reached end of buffer while reading String") end
-  local data = string_sub(self.data, bytes + 1, length + 1)  -- read from after the varint to the end of the string
+  local data = string_sub(self.data, bytes + 1, bytes + length)  -- read from after the varint to the end of the string
   self.data = string_sub(self.data, length + 2)              -- then remove all data up to the end of the varint & string
   return data
 end

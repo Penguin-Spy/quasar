@@ -134,13 +134,13 @@ function Dimension:set_block(position, state)
 end
 
 -- Broadcasts a chat message to all players in the dimension
----@param type registry.chat_type  The chat type
----@param sender string   The name of the one sending the message
----@param content string  The content of the message
----@param target string?  Optional target of the message, used in some chat types
-function Dimension:broadcast_chat_message(type, sender, content, target)
+---@param chat_type identifier  The chat type
+---@param sender string         The name of the one sending the message
+---@param content string        The content of the message
+---@param target string?        Optional target of the message, used in some chat types
+function Dimension:broadcast_chat_message(chat_type, sender, content, target)
   for _, p in pairs(self.players) do
-    p:send_chat_message(type, sender, content, target)
+    p:send_chat_message(chat_type, sender, content, target)
   end
 end
 
@@ -153,11 +153,11 @@ function Dimension:broadcast_system_message(message)
 end
 
 -- Spawns a new entity into this dimension.
----@param type registry.entity_type
+---@param entity_type identifier
 ---@param position Vector3
 ---@return Entity
-function Dimension:spawn_entity(type, position)
-  local entity = Entity._new(self.next_entity_id, type, position)
+function Dimension:spawn_entity(entity_type, position)
+  local entity = Entity._new(self.next_entity_id, entity_type, position)
   self.next_entity_id = self.next_entity_id + 1
   self.entities[entity.id] = entity
   for _, p in pairs(self.players) do
@@ -278,7 +278,6 @@ end
 ---@param dimension_type identifier?   The identifier of this dimension's type
 ---@return Dimension
 function Dimension._new(identifier, dimension_type)
-  ---@type Dimension
   local self = {
     identifier = identifier,
     type = dimension_type or "minecraft:overworld",

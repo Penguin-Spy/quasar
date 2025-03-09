@@ -65,12 +65,12 @@ function Player:set_block(position, state)
 end
 
 -- Sends a chat message to the player
----@param type registry.chat_type  The chat type
----@param sender string   The name of the one sending the message
----@param content string  The content of the message
----@param target string?  Optional target of the message, used in some chat types
-function Player:send_chat_message(type, sender, content, target)
-  self.connection:send_chat_message(type, sender, content, target)
+---@param chat_type identifier  The chat type
+---@param sender string         The name of the one sending the message
+---@param content string        The content of the message
+---@param target string?        Optional target of the message, used in some chat types
+function Player:send_chat_message(chat_type, sender, content, target)
+  self.connection:send_chat_message(chat_type, sender, content, target)
 end
 
 -- Sends a system message to the player

@@ -11,10 +11,12 @@ local util = require "quasar.util"
 local Registry = require "quasar.Registry"
 local Vector3 = require "quasar.Vector3"
 
+local entity_type_registry = Registry.get_map("minecraft:entity_type")
+
 ---@class Entity
----@field id number
+---@field id integer
 ---@field uuid uuid
----@field type registry.entity_type
+---@field type identifier
 ---@field position Vector3
 ---@field pitch number    Degrees from 90 to -90, -90 is looking straight up
 ---@field yaw number      Degrees from 0-359, 0 is +Z, counterclockwise
@@ -27,15 +29,14 @@ local Entity = {}
 -- Internal method.
 ---@see Dimension.spawn_entity
 ---@param id number
----@param entity_type registry.entity_type
+---@param entity_type identifier
 ---@param pos Vector3
 ---@param uuid uuid?
 ---@return Entity
 function Entity._new(id, entity_type, pos, uuid)
-  if type(Registry.entity_types[entity_type]) ~= "number" then
+  if type(entity_type_registry[entity_type]) ~= "number" then
     error("invalid entity type '" .. tostring(entity_type) .. "'")
   end
-  ---@type Entity
   local self = {
     id = id,
     uuid = uuid or util.new_UUID(),

@@ -17,6 +17,7 @@ local socket = require "socket"
 
 local Connection = require "quasar.Connection"
 local Dimension = require "quasar.Dimension"
+local Registry = require "quasar.Registry"
 local util = require "quasar.util"
 local log = require "quasar.log"
 
@@ -118,6 +119,8 @@ local server_socket
 ---@param address string  The address to listen on, or `"*"` to listen on any address
 ---@param port integer    The port to listen on, usually `25565`, may be `0` to listen on an ephemeral port
 function Server.listen(address, port)
+  Registry.finalize()
+
   -- make sure a default dimension exists
   if not default_dimension then
     error("At least one dimension must be created and set as the default dimension before starting the server!")

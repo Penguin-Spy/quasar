@@ -1,3 +1,4 @@
 *.pcapng
 notes.md
 test*.lua
+generated/
