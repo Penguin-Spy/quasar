@@ -31,6 +31,33 @@ local function count_table_entries(t)
   return n
 end
 
+---@alias block {[1]:identifier, [string]:string}
+---@alias blockstate identifier|block
+
+-- Converts the table form of a block to its block state string (properties sorted lexicographically). <br>
+-- **This isn't particularly efficient**; block states should be referenced directly by string or network id whenever possible.
+---@param block blockstate
+---@return identifier
+function Registry.block_to_name(block)
+  if type(block) == "string" then return block end
+  local sorted_keys = {}
+  for property in pairs(block) do
+    if type(property) == "string" then
+      table.insert(sorted_keys, property)
+    end
+  end
+  if next(sorted_keys) then
+    table.sort(sorted_keys)
+    local property_list = {}
+    for _, key in ipairs(sorted_keys) do
+      table.insert(property_list, key .. "=" .. block[key])
+    end
+    return block[1] .. "[" .. table.concat(property_list, ",") .. "]"
+  else
+    return block[1]
+  end
+end
+
 --[[
 vanilla generated/reports:
   blocks.json:      all block states w/ properties; need to process to make the block state map
@@ -70,7 +97,9 @@ local maps = {}
 ---@type table<identifier, table<identifier, table|true>>
 local datapack = {}
 ---@type table<identifier, table<identifier, identifier[]>>
-local tags
+local tags = require "quasar.data.core_datapack_tags"
+---@type table<integer,block>|table<identifier,integer>
+local block_state_map = require "quasar.data.blocks"
 
 -- Gets the registry map for the given category. <br>
 -- A registry map is a 2-way map between an identifier and its integer network id. <br>
@@ -98,6 +127,15 @@ function Registry.get_tags(category)
   return tags[category] or error(string.format("no registry tags for category '%s'", category))
 end
 
+-- Gets the map for block states. <br>
+-- Indexing with the block state integer network id retrieves the `block`. <br>
+-- Indexing with a block's identifier (`minecraft:stone`) retrieves the network id of its default state. <br>
+-- Indexing with a block state string (`minecraft:note_block[instrument=harp,note=0,powered=true]`, with properties in lexicographical order)
+--  retrieves the network id of the specified state.
+---@return table<integer,block>|table<identifier,integer>
+function Registry.get_block_state_map()
+  return block_state_map
+end
 
 --= load initial registry contents =--
 
@@ -112,6 +150,22 @@ for category, data in pairs(require "quasar.data.static_registries") do
   maps[category] = util.freeze(map, string.format("cannot modify contents of the static registry map '%s'", category))
 end
 
+-- load block states & generate string -> id references
+local block_state_string_mappings = {}
+for id, block in pairs(block_state_map --[[@as table<integer,block>]]) do
+  util.freeze(block, "cannot modify block data retrieved from the block state map")
+  local name = Registry.block_to_name(block)
+  block_state_string_mappings[name] = id
+  if block[2] then -- if default, then set the mapping for the name without properties as well
+    block_state_string_mappings[block[1]] = id
+  end
+end
+-- can't modify the table while pairs-ing it
+for k, v in pairs(block_state_string_mappings) do
+  block_state_map[k] = v
+end
+util.freeze(block_state_map, "cannot modify contents of the block state map", "no entry in block state map")
+
 -- load core datapack data and add to data
 -- create empty maps so other files can create local references
 for category, entries in pairs(require "quasar.data.core_datapack") do
@@ -121,9 +175,6 @@ for category, entries in pairs(require "quasar.data.core_datapack") do
   end
   maps[category] = {}
 end
-
--- load core datapack tags and add to tags
-tags = require "quasar.data.core_datapack_tags"
 
 
 --= functions for finalizing the registry contents =--

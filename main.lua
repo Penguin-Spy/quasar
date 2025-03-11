@@ -19,9 +19,9 @@ function overworld:on_break_block(player, pos)
   log("player '%s' broke a block at (%i, %i, %i)", player.username, pos.x, pos.y, pos.z)
 
   if pos.y >= 192 then
-    self:set_block(pos, 0)
+    self:set_block(pos, "minecraft:air")
   else
-    self:set_block(pos, 13)
+    self:set_block(pos, "minecraft:podzol")
   end
 end
 
@@ -102,6 +102,13 @@ function the_nether:on_command(player, command)
     if x and y and z then
       player.position:set(x, y, z)
       player.connection:synchronize_position()
+    else
+      player:send_system_message("syntax error")
+    end
+  elseif c[1] == "setblock" then
+    local x, y, z = tonumber(c[2]), tonumber(c[3]), tonumber(c[4])
+    if x and y and z and type(c[5]) == "string" then
+      player.dimension:set_block({x=x,y=y,z=z}, c[5])
     else
       player:send_system_message("syntax error")
     end

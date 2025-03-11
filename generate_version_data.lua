@@ -17,19 +17,24 @@ local util = require "quasar.util"
 
 local generator_output = "generated/"
 
+local function sort(a, b)
+  if type(a) == type(b) then return a < b
+  else return type(a) == "number" end -- sort numbers b4 strings
+end
+
 -- returns a Lua-parseable string representation of any Lua value (including tables)
 local function dump_to_string(t)
   if type(t) == "table" then
     local out = {"{"}
-    if t[1] then  -- assume a table with an integer index is (only) a sequence
-      for _, v in ipairs(t) do
-        table.insert(out, string.format("%s,", dump_to_string(v)))
-      end
-    else
-      local sorted_keys = {}
-      for k in pairs(t) do table.insert(sorted_keys, k) end
-      table.sort(sorted_keys)
-      for _, key in pairs(sorted_keys) do
+    local sorted_keys = {}
+    for k in pairs(t) do table.insert(sorted_keys, k) end
+    table.sort(sorted_keys, sort)
+    local index = 1
+    for _, key in ipairs(sorted_keys) do
+      if key == index then -- print sequential indexes as list items (without [key]=...)
+        table.insert(out, string.format("%s,", dump_to_string(t[key])))
+        index = index + 1
+      else
         table.insert(out, string.format("[%s]=%s,", string.format("%q", key), dump_to_string(t[key])))
       end
     end
@@ -85,6 +90,22 @@ for registry_name, registry_data in pairs(registries) do
   flattened_registries[registry_name] = entries
 end
 save(flattened_registries, "quasar/data/static_registries.lua")
+
+-- block states
+local block_states = util.read_json(generator_output .. "reports/blocks.json")
+local flattened_block_states = {}
+for identifier, block_data in pairs(block_states) do
+  for _, state_data in pairs(block_data.states) do
+    local state = {identifier, state_data.default}
+    if state_data.properties then
+      for name, value in pairs(state_data.properties) do
+        state[name] = value
+      end
+    end
+    flattened_block_states[state_data.id] = state
+  end
+end
+save(flattened_block_states, "quasar/data/blocks.lua")
 
 -- core (vanilla) datapack entries
 local core_datapack = {}

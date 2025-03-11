@@ -29,12 +29,20 @@ end
 -- freezes a table, preventing assigning new values. not recursive (contained table values are not frozen)
 ---@generic T: table
 ---@param t T
----@param message string  the error message to display when attempting to modify the table
+---@param modify_error string the error message to display when attempting to modify the table
+---@param index_error string? the error message when no value exists for a key
 ---@return T
-function util.freeze(t, message)
-  return setmetatable(t, {__newindex = function (_, k, _)
-    error(string.format("%s (setting key '%s')", message, k))
-  end, __metatable = true})
+function util.freeze(t, modify_error, index_error)
+  ---@type metatable
+  local mt = {__newindex = function (_, k, _)
+    error(string.format("%s (setting key '%s')", modify_error, k))
+  end, __metatable = true}
+  if index_error then
+    mt.__index = function (_, k)
+      error(string.format("%s (getting key '%s')", index_error, k))
+    end
+  end
+  return setmetatable(t, mt)
 end
 
 -- Generates a new UUIDv4 in binary form (16-byte string).

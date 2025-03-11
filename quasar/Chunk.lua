@@ -10,7 +10,10 @@
   defined by the Mozilla Public License, v. 2.0.
 ]]
 
-local SendBuffer = require 'quasar.SendBuffer'
+local SendBuffer = require "quasar.SendBuffer"
+local Registry = require "quasar.Registry"
+
+local biome_registry_map = Registry.get_map("minecraft:worldgen/biome")
 
 ---@class Chunk.subchunk
 ---@field block_count integer
@@ -100,7 +103,7 @@ function Chunk:get_data()
     end
 
     buffer:byte(0)    -- biome palette type 0 (single valued)
-    buffer:varint(0)  -- single value: 0
+    buffer:varint(biome_registry_map["minecraft:plains"])  -- single value: 0
     buffer:varint(0)  -- size of data array (0 for single valued)
   end
   return buffer:concat_with_length()

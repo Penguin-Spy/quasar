@@ -13,6 +13,7 @@ local util = require "quasar.util"
 local Vector3 = require "quasar.Vector3"
 local Entity = require "quasar.Entity"
 local Chunk = require 'quasar.Chunk'
+local Registry = require 'quasar.Registry'
 
 ---@class Dimension
 ---@field timer table?  Copas timer for dimension ticking
@@ -31,7 +32,7 @@ local Dimension = {}
 ---@param player Player     the player who broke the block
 ---@param position blockpos a table with the fields x,y,z
 function Dimension:on_break_block(player, position)
-  self:set_block(position, 0)
+  self:set_block(position, "minecraft:air")
 end
 
 -- Called when the player uses an item while not looking at a block.
@@ -68,7 +69,7 @@ function Dimension:on_use_item_on_block(player, slot, pos, face, cursor, inside_
   else  --if face == 5 then
     pos.x = pos.x + 1
   end
-  self:set_block(pos, 1)
+  self:set_block(pos, "minecraft:stone")
 end
 
 -- Called when a player sends a chat message. <br>
@@ -117,14 +118,17 @@ function Dimension:tick()
   end]]
 end
 
+local block_state_map = Registry.get_block_state_map()
 
 -- Updates the block at the specified position for all players in this dimension.
 ---@param position blockpos
----@param state integer     The block state ID to set at the position
+---@param block blockstate
 ---@return boolean        # Whether the placement was successful
-function Dimension:set_block(position, state)
+function Dimension:set_block(position, block)
   local chunk = self:get_chunk(position.x // 16, position.z // 16)
   if not chunk then return false end
+
+  local state = block_state_map[Registry.block_to_name(block)]
 
   chunk:set_block(position, state)
   for _, p in pairs(self.players) do
