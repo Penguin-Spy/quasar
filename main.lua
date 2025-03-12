@@ -28,8 +28,9 @@ end
 function overworld:on_command(player, command)
   local c = util.split(command, " ")
   if c[1] == "transfer" then
-    if c[2] == "nether" then
-      player:transfer_dimension(Server.get_dimension("minecraft:the_nether"))
+    local dimension = Server.get_dimension(c[2])
+    if dimension then
+      player:transfer_dimension(dimension)
     else
       player:send_system_message("unknown dimension")
     end
@@ -113,14 +114,15 @@ function the_nether:on_command(player, command)
       player:send_system_message("syntax error")
     end
   elseif c[1] == "transfer" then
-    if c[2] == "overworld" then
-      player:transfer_dimension(Server.get_dimension("minecraft:overworld"))
+    local dimension = Server.get_dimension(c[2])
+    if dimension then
+      player:transfer_dimension(dimension)
     else
       player:send_system_message("unknown dimension")
     end
   elseif c[1] == "disconnect" then
     player.connection:disconnect("bye")
-  elseif c[1] == "lua" then
+  --[[elseif c[1] == "lua" then
     local env = setmetatable({
       player = player,
       Server = Server,
@@ -133,7 +135,7 @@ function the_nether:on_command(player, command)
     local success, err = pcall(f)
     if not success then
       player:send_system_message(err or "unknown run error")
-    end
+    end]]
   else
     player:send_system_message('what no')
   end

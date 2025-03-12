@@ -445,17 +445,14 @@ end)
 
 --= status state packet handlers =--
 
-local status_response = json.encode{
-  version = { name = server_version, protocol = server_protocol },
-  players = { max = 0, online = 2 },
-  description = { text = "woah haiii :3" },
-  enforcesSecureChat = false,
-  previewsChat = false
-}
-
 handle(STATE_STATUS, "status_request", function (self)
   log("status request")
-  self:send("status_response", SendBuffer():string(status_response))
+  local status = Server.get_status()
+  status.version = status.version or {}
+  status.version.name = status.version.name or server_version
+  ---@diagnostic disable-next-line: inject-field
+  status.version.protocol = server_protocol
+  self:send("status_response", SendBuffer():string(json.encode(status)))
 end)
 
 handle(STATE_STATUS, "ping_request", function (self)
@@ -479,6 +476,8 @@ local function finish_login(self, username, uuid, skin)
   end
 
   self.player = Player._new(username, uuid, self, skin)
+  Server.players[uuid] = self.player
+  Server.player_count = Server.player_count + 1
 
   log("login finish: '%s' (%s), %q", username, util.UUID_to_string(uuid), skin ~= nil)
   -- Send login success (corresponds to "Joining world..." on the client connection screen)
@@ -632,11 +631,12 @@ end)
 
 handle(STATE_CONFIGURATION, "client_information", function (self)
   local locale, view_distance, chat_mode, chat_colors = self.buffer:string(), self.buffer:byte(), self.buffer:varint(), self.buffer:boolean()
-  local skin_layers, main_hand = self.buffer:byte(), self.buffer:varint()
+  local skin_layers, main_hand, text_filtering, allow_server_listings = self.buffer:byte(), self.buffer:varint(), self.buffer:boolean(), self.buffer:boolean()
   self.buffer:read_to_end()
-  log("client information (configuration): %s, %i, %i, %q, %02x, %i", locale, view_distance, chat_mode, chat_colors, skin_layers, main_hand)
+  log("client information (configuration): %s, %i, %i, %q, %02x, %i, %q, %q", locale, view_distance, chat_mode, chat_colors, skin_layers, main_hand, text_filtering, allow_server_listings)
   self.player.skin.layers = skin_layers & 0x7F       -- mask off unused bit
   self.player.skin.hand = main_hand == 0 and 0 or 1  -- ensure it's only 0 or 1 (default 1; right hand)
+  self.player.allow_server_listings = allow_server_listings
 end)
 
 handle(STATE_CONFIGURATION, "custom_payload", function (self)
@@ -754,9 +754,10 @@ end)
 
 handle(STATE_PLAY, "client_information", function (self)
   local locale, view_distance, chat_mode, chat_colors = self.buffer:string(), self.buffer:byte(), self.buffer:varint(), self.buffer:boolean()
-  local skin_layers, main_hand = self.buffer:byte(), self.buffer:varint()
+  local skin_layers, main_hand, text_filtering, allow_server_listings = self.buffer:byte(), self.buffer:varint(), self.buffer:boolean(), self.buffer:boolean()
   self.buffer:read_to_end()
-  log("client information (play): %s, %i, %i, %q, %02x, %i", locale, view_distance, chat_mode, chat_colors, skin_layers, main_hand)
+  log("client information (play): %s, %i, %i, %q, %02x, %i, %q, %q", locale, view_distance, chat_mode, chat_colors, skin_layers, main_hand, text_filtering, allow_server_listings)
+  self.player.allow_server_listings = allow_server_listings
 
   local skin = self.player.skin
   if skin_layers ~= skin.layers or main_hand ~= skin.hand then
@@ -1066,7 +1067,8 @@ function Connection:destroy(clean)
 
   -- if this connection was in the game
   if self.player then
-    -- TODO: any dimensionless player cleanup
+    Server.players[self.player.uuid] = nil
+    Server.player_count = Server.player_count - 1
     if self.player.dimension then  -- if this player was in a dimension
       self.player.dimension:_remove_player(self.player)
     end

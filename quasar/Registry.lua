@@ -31,31 +31,21 @@ local function count_table_entries(t)
   return n
 end
 
----@alias block {[1]:identifier, [string]:string}
----@alias blockstate identifier|block
-
 -- Converts the table form of a block to its block state string (properties sorted lexicographically). <br>
 -- **This isn't particularly efficient**; block states should be referenced directly by string or network id whenever possible.
----@param block blockstate
----@return identifier
-function Registry.block_to_name(block)
-  if type(block) == "string" then return block end
+---@param name identifier
+---@param properties table<string,string|integer|boolean> all properties must be specified
+function Registry.get_block_state_with_properties(name, properties)
   local sorted_keys = {}
-  for property in pairs(block) do
-    if type(property) == "string" then
-      table.insert(sorted_keys, property)
-    end
+  for property in pairs(properties) do
+    table.insert(sorted_keys, property)
   end
-  if next(sorted_keys) then
-    table.sort(sorted_keys)
-    local property_list = {}
-    for _, key in ipairs(sorted_keys) do
-      table.insert(property_list, key .. "=" .. block[key])
-    end
-    return block[1] .. "[" .. table.concat(property_list, ",") .. "]"
-  else
-    return block[1]
+  table.sort(sorted_keys)
+  local property_list = {}
+  for _, key in ipairs(sorted_keys) do
+    table.insert(property_list, key .. "=" .. properties[key])
   end
+  return name .. "[" .. table.concat(property_list, ",") .. "]"
 end
 
 --[[
@@ -98,7 +88,7 @@ local maps = {}
 local datapack = {}
 ---@type table<identifier, table<identifier, identifier[]>>
 local tags = require "quasar.data.core_datapack_tags"
----@type table<integer,block>|table<identifier,integer>
+---@type table<integer,{[1]:string,[2]:true?,[string]:string}>|table<identifier,integer>
 local block_state_map = require "quasar.data.blocks"
 
 -- Gets the registry map for the given category. <br>
@@ -132,7 +122,6 @@ end
 -- Indexing with a block's identifier (`minecraft:stone`) retrieves the network id of its default state. <br>
 -- Indexing with a block state string (`minecraft:note_block[instrument=harp,note=0,powered=true]`, with properties in lexicographical order)
 --  retrieves the network id of the specified state.
----@return table<integer,block>|table<identifier,integer>
 function Registry.get_block_state_map()
   return block_state_map
 end
@@ -152,9 +141,15 @@ end
 
 -- load block states & generate string -> id references
 local block_state_string_mappings = {}
-for id, block in pairs(block_state_map --[[@as table<integer,block>]]) do
+for id, block in pairs(block_state_map --[[@as table<integer,{[1]:string,[2]:true?}>]]) do
   util.freeze(block, "cannot modify block data retrieved from the block state map")
-  local name = Registry.block_to_name(block)
+  local properties = {}
+  for k, v in pairs(block) do
+    if type(k) == "string" then
+      properties[k] = v
+    end
+  end
+  local name = Registry.get_block_state_with_properties(block[1], properties)
   block_state_string_mappings[name] = id
   if block[2] then -- if default, then set the mapping for the name without properties as well
     block_state_string_mappings[block[1]] = id

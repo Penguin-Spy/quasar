@@ -122,13 +122,13 @@ local block_state_map = Registry.get_block_state_map()
 
 -- Updates the block at the specified position for all players in this dimension.
 ---@param position blockpos
----@param block blockstate
+---@param block identifier
 ---@return boolean        # Whether the placement was successful
 function Dimension:set_block(position, block)
   local chunk = self:get_chunk(position.x // 16, position.z // 16)
   if not chunk then return false end
 
-  local state = block_state_map[Registry.block_to_name(block)]
+  local state = block_state_map[block]
 
   chunk:set_block(position, state)
   for _, p in pairs(self.players) do

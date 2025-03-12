@@ -17,6 +17,7 @@ local Vector3 = require "quasar.Vector3"
 ---@field username string
 ---@field uuid uuid
 ---@field skin {texture: string?, texture_signature: string?, layers: integer, hand: 0|1}
+---@field allow_server_listings boolean True if the player allows their name to show in the server list player sample.
 ---@field inventory table<integer, Item>
 ---@field selected_slot integer  0-8
 ---@field connection Connection
@@ -136,6 +137,7 @@ function Player._new(username, uuid, con, skin)
     username = username,
     uuid = uuid,
     skin = { layers = 0, hand = 1, texture = skin and skin.texture, texture_signature = skin and skin.texture_signature },
+    allow_server_listings = false, -- default to false until receiving the client information packet
     inventory = {},
     selected_slot = 0,
     connection = con,

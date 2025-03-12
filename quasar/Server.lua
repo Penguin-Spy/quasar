@@ -24,17 +24,31 @@ local log = require "quasar.log"
 ---@alias identifier string                                     A Minecraft identifier, in the form of `"namespace:thing"`
 ---@alias uuid       string                                     A UUID in binary form.
 ---@alias blockpos   {x: integer, y: integer, z: integer}       A block position in the world
----@alias text_component (string|{text:string,color:string?})   A text component. May be either a string containing plain text or a Lua table representing a text component.
+---@alias text_component (string|{text:string,color:string?}|{translate:string,with:string[]})   A text component. May be either a string containing plain text or a Lua table representing a text component.
 
-local identifier_pattern = "^[%l%d_%-]+:[%l%d_%-]+$"
+---@class Server.status_response
+---@field description text_component?   The MOTD of the server. The client also supports rendering section sign (§) formatted text here
+---@field favicon string?               A 64x64 pixel base64 encoded PNG image, prepended with "data:image/png;base64,"
+---@field players { max: integer, online: integer, sample: ({name:string, id:string})[]?}?  player UUIDs should be formatted with dashes
+---@field version { name: string? }?    A custom version name may be specified; if not present the actual version is displayed.
+---@field enforcesSecureChat boolean?   Unknown effect; quasar does not support secure chat currently
+---@field preventsChatReports boolean?  not from the official server, for the No Chat Reports mod; will indicate to clients it is a "Safe Server"
+
+local identifier_pattern = "^[%l%d_]+:[%l%d_]+$"
 
 ---@class Server
 ---@field address string  The IP address the server is listening for connections on. `0.0.0.0` means any address.
 ---@field port integer    The port the server is listening for connections on.
 local Server = {
   properties = {
-    online_mode = true
-  }
+    online_mode = true,
+    motd = "A Quasar Server"
+  },
+  ---@type table<uuid, Player>
+  players = {},
+  -- the number of players currently connected
+  ---@type integer
+  player_count = 0
 }
 
 ---@type table<identifier, Dimension>
@@ -86,8 +100,28 @@ function Server.get_default_dimension()
   return default_dimension
 end
 
----@type table<uuid, Player>
-local players = {}
+-- Called when a ping is received, to generate the status response.<br>
+-- By default, it will generate a status similar to the official server.
+---@return Server.status_response response  the table will be modified to contain the `version` field
+function Server.get_status()
+  local player_sample, k, v = {}, next(Server.players)
+  for _ = 1, 12 do  -- limit list to 12 players
+    if v and v.allow_server_listings then
+      table.insert(player_sample, {name = v.username, id = util.UUID_to_string(v.uuid)})
+    elseif not k then break end
+    k, v = next(Server.players, k)
+  end
+  ---@type Server.status_response
+  return {
+    description = Server.properties.motd,
+    players = {
+      max = 20,
+      online = Server.player_count,
+      sample = player_sample
+    },
+    enforcesSecureChat = true,
+  }
+end
 
 -- Called at the beginning of the connection right after the player has been authenticated.
 ---@param username string   The username sent by the client
