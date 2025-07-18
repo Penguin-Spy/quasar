@@ -1,6 +1,13 @@
 --[[ generate_version_data.lua © Penguin_Spy 2025
   converts the output of the official data generator into Lua files
 
+  to update the generated Lua tables to a new Minecraft version:
+  - download the latest server.jar
+  - run the data generator (ideally in a seperate directory to avoid clutter):
+      java -DbundlerMainClass="net.minecraft.data.Main" -jar server.jar --server --reports
+  - copy the generated folder to this directory
+  - run this script
+
   This Source Code Form is subject to the terms of the Mozilla Public
   License, v. 2.0. If a copy of the MPL was not distributed with this
   file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -111,14 +118,21 @@ save(flattened_block_states, "quasar/data/blocks.lua")
 local core_datapack = {}
 for _, folder in pairs{
   "banner_pattern",
+  "cat_variant",
   "chat_type",
+  "chicken_variant",
+  "cow_variant",
   "damage_type",
+  "dialog",
   "dimension_type",
   "enchantment",
+  "frog_variant",
   "jukebox_song",
   "painting_variant",
+  "pig_variant",
   "trim_material",
   "trim_pattern",
+  "wolf_sound_variant",
   "wolf_variant",
   "worldgen/biome",
 } do
@@ -138,6 +152,7 @@ save(core_datapack, "quasar/data/core_datapack.lua")
 local core_datapack_tags = {}
 for _, folder in pairs{
   "block",
+  "dialog",
   "item",
   "entity_type",
   "enchantment",

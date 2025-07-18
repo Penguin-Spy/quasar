@@ -1,4 +1,4 @@
---[[ connection.lua © Penguin_Spy 2024
+--[[ connection.lua © Penguin_Spy 2024-2025
 
   This Source Code Form is subject to the terms of the Mozilla Public
   License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -30,10 +30,10 @@ local chat_type_registry = Registry.get_map("minecraft:chat_type")
 
 ---@class Server
 local Server
--- only require "openssl.cipher",  "openssl.digest", and "openssl.bignum" if the server has encryption enabled
+-- only require "openssl.cipher", "openssl.digest", and "openssl.bignum" if the server has encryption enabled
 local cipher, digest, bn
 
-local server_version <const>, server_protocol <const> = "1.21.4", 769
+local server_version <const>, server_protocol <const> = "1.21.7", 772
 
 ---@class openssl.cipher
 ---@field update fun(self:openssl.cipher, data:string):string, string?
@@ -193,7 +193,7 @@ function Connection:close()
   end
 end
 
--- Disconnects the client with a message. The message will only be sent in the login & play stages, but the connection will always be closed.
+-- Disconnects the client with a message. The message will only be sent in the login, configuration, & play stages, but the connection will always be closed.
 ---@param message text_component   A table containing a text component: `{ text = "reason" }`
 function Connection:disconnect(message)
   if type(message) ~= "table" then
@@ -201,7 +201,7 @@ function Connection:disconnect(message)
   end
   if self.state == STATE_LOGIN or self.state == STATE_LOGIN_WAIT_ENCRYPT then
     self:send("login_disconnect", SendBuffer():string(json.encode(message)))
-  elseif self.state == STATE_PLAY then
+  elseif self.state == STATE_PLAY or self.state == STATE_CONFIGURATION or self.state == STATE_CONFIGURATION_WAIT_ACK then
     self:send("disconnect", SendBuffer():raw(NBT.compound(message)))
   end
   self:close()
@@ -230,8 +230,8 @@ function Connection:send_chunk(chunk_x, chunk_z, chunk)
 
   buffer:int(chunk_x)
   buffer:int(chunk_z)
-  buffer:raw(NBT.compound{})  -- empty heightmaps
 
+  buffer:varint(0)            -- 0 heightmaps
   buffer:raw(chunk_data)      -- chunk data (includes size)
 
   buffer:varint(0)            -- # of block entites
@@ -616,7 +616,9 @@ handle(STATE_CONFIGURATION, "select_known_packs", function (self)
     client_known_packs[pack_namespace .. ":" .. pack_id] = pack_version
   end
   if client_known_packs["minecraft:core"] ~= server_version then
+    log("  client does not know server version")
     self:disconnect{ translate = "multiplayer.disconnect.outdated_client", with = { server_version } }
+    return
   end
 
   -- send registry data
@@ -1044,7 +1046,7 @@ function Connection:loop()
       -- handle the packet
       local success, packet_err = xpcall(func, debug.traceback, self)
       if not success then
-        err = packet_err
+        err = string.format("while handling packet 0x%02X in state %i - %s", packet_id, self.state, packet_err)
         goto exit
       end
     end

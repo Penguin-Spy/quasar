@@ -171,6 +171,9 @@ for category, entries in pairs(require "quasar.data.core_datapack") do
   maps[category] = {}
 end
 
+-- include server links in the pause screen additions tag by default
+tags["minecraft:dialog"]["minecraft:pause_screen_additions"] = {"minecraft:server_links"}
+
 
 --= functions for finalizing the registry contents =--
 

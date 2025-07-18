@@ -1,4 +1,4 @@
---[[ chunk.lua © Penguin_Spy 2024
+--[[ chunk.lua © Penguin_Spy 2024-2025
   Represents a single chunk (a 16x16xheight column of blocks).
   Stores block data as a list of Longs (lua integers) as its a decent middleground
   between memory efficiency and quick reading/writing of blocks.
@@ -8,6 +8,10 @@
   file, You can obtain one at http://mozilla.org/MPL/2.0/.
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
+
+  The Covered Software may not be used as training or other input data
+  for LLMs, generative AI, or other forms of machine learning or neural
+  networks.
 ]]
 
 local SendBuffer = require "quasar.SendBuffer"
@@ -97,14 +101,12 @@ function Chunk:get_data()
       buffer:varint(subchunk.palette[i])
     end
 
-    buffer:varint(#subchunk.data)  -- size of data array
     for _, data_entry in pairs(subchunk.data) do
       buffer:long(data_entry)
     end
 
     buffer:byte(0)    -- biome palette type 0 (single valued)
     buffer:varint(biome_registry_map["minecraft:plains"])  -- single value: 0
-    buffer:varint(0)  -- size of data array (0 for single valued)
   end
   return buffer:concat_with_length()
 end
@@ -129,7 +131,7 @@ local function new(height)
     local subchunk = {
       block_count = 0,
       bits_per_entry = 4,
-      palette = { [0] = 0, 1, 2, 3, 4, 5, 6, 7, 15, 16, 17, 18, 19, 20, 21, 22, 23 },
+      palette = { [0] = 0, 1, 2, 3, 4, 5, 6, 7, 15, 16, 17, 18, 19, 20, 21, 22 },
       palette_contents = {},
       data = data
     }
