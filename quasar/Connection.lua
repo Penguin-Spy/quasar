@@ -596,7 +596,12 @@ handle(STATE_LOGIN_WAIT_ACK, "login_acknowledged", function (self)
   -- send feature flags packet (enable vanilla features (not required for registry sync/client to connect, but probably important))
   self:send("update_enabled_features", SendBuffer():varint(1):string("minecraft:vanilla"))
   -- start datapack negotiation (official server declares the "minecraft:core" datapack with the server version)
-  self:send("select_known_packs", SendBuffer():varint(1):string("minecraft"):string("core"):string(server_version))
+  -- unknown if this is how the official server does it, but this gets the client to say it knows 1.21.7 or 1.21.8
+  -- TODO: a more intentional way to handle this for future protocol-compatible versions
+  self:send("select_known_packs", SendBuffer():varint(2)
+    :string("minecraft"):string("core"):string(server_version)
+    :string("minecraft"):string("core"):string("1.21.8")
+  )
 end)
 
 
@@ -615,7 +620,7 @@ handle(STATE_CONFIGURATION, "select_known_packs", function (self)
     log("  client knows pack %s:%s of version %s", pack_namespace, pack_id, pack_version)
     client_known_packs[pack_namespace .. ":" .. pack_id] = pack_version
   end
-  if client_known_packs["minecraft:core"] ~= server_version then
+  if client_known_packs["minecraft:core"] ~= server_version and client_known_packs["minecraft:core"] ~= "1.21.8" then
     log("  client does not know server version")
     self:disconnect{ translate = "multiplayer.disconnect.outdated_client", with = { server_version } }
     return

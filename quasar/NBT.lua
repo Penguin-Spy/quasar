@@ -1,10 +1,14 @@
---[[ NBT.lua © Penguin_Spy 2024
+--[[ NBT.lua © Penguin_Spy 2024-2025
 
   This Source Code Form is subject to the terms of the Mozilla Public
   License, v. 2.0. If a copy of the MPL was not distributed with this
   file, You can obtain one at http://mozilla.org/MPL/2.0/.
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
+
+  The Covered Software may not be used as training or other input data
+  for LLMs, generative AI, or other forms of machine learning or neural
+  networks.
 ]]
 
 
@@ -94,6 +98,25 @@ function NBT.list(items)
   return buf
 end
 
+---@param items integer[]
+---@return string
+function NBT.long_array(items)
+  local buf = {"\12", string_pack(">i4", #items) }
+  for _, item in ipairs(items) do
+    table.insert(buf, string_pack(">i8", item))
+  end
+  return table.concat(buf)
+end
+
+-- encodes an NBT compound with a name for the root compound
+---@param root_name string
+---@param items table
+function NBT.encode(root_name, items)
+  local data = NBT.compound(items)
+  local name = string_pack(">s2", root_name)
+  return string_sub(data, 1, 1) .. name .. string_sub(data, 2)
+end
+
 
 local parse_payload
 
@@ -132,7 +155,7 @@ end
 ---@param tag integer the NBT tag type
 ---@param data string     the raw data
 ---@param offset integer  where to start reading the payload from
----@return any payload, integer offset
+---@return any payload, integer? offset
 function parse_payload(tag, data, offset)
   if tag == 1 then
     return string_unpack(">i1", data, offset)
@@ -146,10 +169,12 @@ function parse_payload(tag, data, offset)
     return string_unpack(">f", data, offset)
   elseif tag == 6 then
     return string_unpack(">d", data, offset)
+  elseif tag == 7 then
+    return string_unpack(">s4", data, offset) -- parse a byte array as a Lua string
   elseif tag == 8 then
     return string_unpack(">s2", data, offset)
   elseif tag == 9 then
-    local list_tag = string_byte(data, offset)
+    local list_tag = string_byte(data, offset) ---@type integer
     return parse_list_payload(list_tag, data, offset + 1)
   elseif tag == 10 then
     return parse_compound_payload(data, offset)

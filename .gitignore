@@ -2,3 +2,5 @@
 notes.md
 test*.lua
 generated/
+*.nbt
+*.mca

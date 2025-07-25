@@ -1,12 +1,12 @@
 # Quasar
 A library for creating "virtual" Minecraft servers in Lua.  
-Supports Minecraft 1.21.7 (protocol 772). If you wish to support clients of other (older) versions, use a proxy in front of the server.
+Supports Minecraft 1.21.7/8 (protocol 772). If you wish to support clients of other (older) versions, use a proxy in front of the server.
 
 Currently in development, not ready for normal usage.
 
 # Features
 - Players joining & seeing eachother
-- Chunk loading
+- Chunk loading from region files
 - Block breaking/placing, persistent through client chunks unloading
 - Authentication/Encryption, player skins & skin layers
 - Player animations (arm swing, shifting)
@@ -15,8 +15,7 @@ Currently in development, not ready for normal usage.
 - Vanilla Registry data, incl. block states, items, packets, etc.
 
 # Planned features
-- Chunk loading from region files (in progress)
-- Chunk generation (very simple terrain)
+- Chunk generation (very simple terrain) (in progress)
 - Survival block breaking
 - Helper for block placing from items (item id & facing -> blockstate)
 - Item GUIs
@@ -32,6 +31,7 @@ Currently in development, not ready for normal usage.
   - Chest/external inventories (moving items within & between)
   - Creative inventory support
 - Entity behavior framework (easier control of entity movement, animations, interactions)
+- Optional implementation of performance-critical components in C (Connection, Chunk, NBT?, Anvil?)
 - Dimensions in their own threads w/ Lua Lanes or similar (optional)
 - Dimensions distributed across multiple physical computers? (perhaps best left to proxy software & just transferring the player)
 

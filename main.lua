@@ -1,10 +1,14 @@
---[[ main.lua © Penguin_Spy 2024
+--[[ main.lua © Penguin_Spy 2024-2025
 
   This Source Code Form is subject to the terms of the Mozilla Public
   License, v. 2.0. If a copy of the MPL was not distributed with this
   file, You can obtain one at http://mozilla.org/MPL/2.0/.
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
+
+  The Covered Software may not be used as training or other input data
+  for LLMs, generative AI, or other forms of machine learning or neural
+  networks.
 ]]
 
 -- we redefine fields to set the event handlers
@@ -13,8 +17,13 @@
 local Server = require "quasar.Server"
 local log = require "quasar.log"
 local util = require "quasar.util"
+local ChunkProvider = require "quasar.ChunkProvider"
 
-local overworld = Server.create_dimension("minecraft:overworld")
+local overworld = Server.create_dimension{
+  identifier = "minecraft:overworld",
+  chunk_provider = ChunkProvider.region{ path = "world/" }
+}
+
 function overworld:on_break_block(player, pos)
   log("player '%s' broke a block at (%i, %i, %i)", player.username, pos.x, pos.y, pos.z)
 
@@ -40,48 +49,20 @@ function overworld:on_command(player, command)
 end
 
 
-local the_nether = Server.create_dimension("minecraft:the_nether")
-the_nether.spawnpoint:set(1.5, 66, 8.5)
-
--- show letters in the ground for testing chunk loading
--- s for spawn
-local spawn_chunk_data = the_nether:get_chunk(0, 0).subchunks[8].data
-spawn_chunk_data[250] = 0x0111111000011110
-spawn_chunk_data[249] = 0x0111110111111110
-spawn_chunk_data[248] = 0x0111111000111110
-spawn_chunk_data[247] = 0x0111111111011110
-spawn_chunk_data[246] = 0x0111110000111110
-
--- f for far
-local far_chunk_data = the_nether:get_chunk(-3, 0).subchunks[8].data
-far_chunk_data[252] = 0x0111111100111110
-far_chunk_data[251] = 0x0111111011111110
-far_chunk_data[250] = 0x0111110000111110
-far_chunk_data[249] = 0x0111111011111110
-far_chunk_data[248] = 0x0111111011111110
-far_chunk_data[247] = 0x0111111011111110
-far_chunk_data[246] = 0x0111111011111110
----- b for bonus (official edge chunks)
-local bonus_chunk_data = the_nether:get_chunk(-4, 0).subchunks[8].data
-bonus_chunk_data[252] = 0x0111110111111110
-bonus_chunk_data[251] = 0x0111110111111110
-bonus_chunk_data[250] = 0x0111110100111110
-bonus_chunk_data[249] = 0x0111110011011110
-bonus_chunk_data[248] = 0x0111110111011110
-bonus_chunk_data[247] = 0x0111110111011110
-bonus_chunk_data[246] = 0x0111110000111110
-
--- line of increading block id
-the_nether:get_chunk(-1, 0).subchunks[8].data[245] = 0x0222222222222220
-the_nether:get_chunk(-2, 0).subchunks[8].data[245] = 0x0333333333333330
-far_chunk_data[245] = 0x0444444444444440
-bonus_chunk_data[245] = 0x0555555555555550
-the_nether:get_chunk(-5, 0).subchunks[8].data[245] = 0x0666666666666660
-the_nether:get_chunk(-6, 0).subchunks[8].data[245] = 0x0777777777777770
-the_nether:get_chunk(-7, 0).subchunks[8].data[245] = 0x0888888888888880
-the_nether:get_chunk(-8, 0).subchunks[8].data[245] = 0x0999999999999990
-the_nether:get_chunk(-9, 0).subchunks[8].data[245] = 0x0AAAAAAAAAAAAAA0
-the_nether:get_chunk(-10, 0).subchunks[8].data[245] = 0x0BBBBBBBBBBBBBB0
+local the_nether = Server.create_dimension{
+  identifier = "minecraft:the_nether",
+  chunk_provider = --[[ChunkProvider.superflat{
+    layers = {
+      ["minecraft:bedrock"] = 1,
+      ["minecraft:dirt"] = 2,
+      ["minecraft:grass_block"] = 1,
+    },
+    biome = "minecraft:plains",
+    subchunk_height = 24,
+  }]]
+  ChunkProvider.region{ path = "world/" }
+}
+the_nether.spawnpoint:set(1.5, 128, 8.5)
 
 ---@param player Player
 ---@param command string

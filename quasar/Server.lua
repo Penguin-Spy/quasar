@@ -1,4 +1,4 @@
---[[ Server.lua © Penguin_Spy 2024
+--[[ Server.lua © Penguin_Spy 2024-2025
 
   This Source Code Form is subject to the terms of the Mozilla Public
   License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -57,23 +57,24 @@ local dimensions = {}
 local default_dimension = nil
 
 -- Creates a new Dimension.
----@param identifier identifier   The identifier for the dimension, e.g. `"minecraft:overworld"`
----@param options nil             Options for the dimension (none currently)
+---@param options {identifier: identifier, chunk_provider: ChunkProvider}   Options for the dimension
 ---@return Dimension
-function Server.create_dimension(identifier, options)
+function Server.create_dimension(options)
+  local identifier = options.identifier
   if type(identifier) ~= "string" or not string.match(identifier, identifier_pattern) then
     error("'" .. tostring(identifier) .. "' is not a valid identifier!")
   elseif dimensions[identifier] then
     error("A dimension with the identifier '" .. identifier .. "' already exists!")
   end
-  local dim = Dimension._new(identifier)
+
+  local dim = Dimension._new(options)
   dimensions[identifier] = dim
-  dim.timer = copas_timer.new{
+  --[[dim.timer = copas_timer.new{
     name      = "quasar_dimension[" .. identifier .. "]",
     recurring = true,
     delay     = 0.05,  -- 20 ticks per second
     callback  = function() dim:tick() end
-  }
+  }]]
   return dim
 end
 
@@ -83,7 +84,7 @@ end
 
 -- Gets an existing Dimension.
 ---@param identifier identifier   The ID of the dimension.
----@return Dimension
+---@return Dimension?
 function Server.get_dimension(identifier)
   return dimensions[identifier]
 end

@@ -1,4 +1,4 @@
---[[ dimension.lua © Penguin_Spy 2024
+--[[ dimension.lua © Penguin_Spy 2024-2025
   Handles a specific dimension on the server, comprised of blocks (in chunks) and entities.
 
   This Source Code Form is subject to the terms of the Mozilla Public
@@ -6,6 +6,10 @@
   file, You can obtain one at http://mozilla.org/MPL/2.0/.
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
+
+  The Covered Software may not be used as training or other input data
+  for LLMs, generative AI, or other forms of machine learning or neural
+  networks.
 ]]
 
 local log = require "quasar.log"
@@ -19,8 +23,9 @@ local Registry = require 'quasar.Registry'
 ---@field timer table?  Copas timer for dimension ticking
 ---@field identifier identifier The unique namespaced identifier of this dimension
 ---@field type identifier       The identifier of this dimension's type
----@field chunks {[integer]: {[integer]: Chunk }}
----@field empty_chunk Chunk?    A chunk comprised of entirely air, sent to the client for nonexistent chunks
+---@field chunks {[integer]: {[integer]: Chunk|false }}   An entry is false if there is no chunk there
+---@field empty_chunk Chunk               A chunk usually comprised of entirely air, sent to the client for nonexistent chunks
+---@field chunk_provider ChunkProvider    The provider for chunks for this Dimension
 ---@field view_distance integer Radius in chunks; the area where the client accepts chunks is a square with sides `2r+7`, and chunks are rendered in a `2r+1` square.
 ---@field players Player[]      All players currently in this Dimension
 ---@field entities Entity[]
@@ -174,10 +179,23 @@ end
 ---@param chunk_x integer
 ---@param chunk_z integer
 ---@param player Player?   the player to get the chunk for
----@return Chunk|nil chunk
+---@return Chunk|false chunk
 function Dimension:get_chunk(chunk_x, chunk_z, player)
+  -- get the row of chunks, creating it if it doesn't exist
   local cx = self.chunks[chunk_x]
-  return cx and cx[chunk_z]
+  if not cx then
+    cx = {}
+    self.chunks[chunk_x] = cx
+  end
+
+  -- get the chunk itself, loading it if it isn't loaded
+  local chunk = cx[chunk_z]
+  if chunk == nil then -- specifically check nil but not false
+    -- if "no chunk" is returned, still save `false` to not call load() again unnecessarily
+    chunk = self.chunk_provider:load(chunk_x, chunk_z)
+    cx[chunk_z] = chunk
+  end
+  return chunk
 end
 
 -- Spawns the player into the dimension, adding their player entity & raising `on_player_join`.
@@ -267,37 +285,31 @@ function Dimension:_on_player_changed_chunk(player, cx, cz, load_all)
     for z = cz - r, cz + r do
       if (x < (cpos.x - r)) or (x > (cpos.x + r))
           or (z < (cpos.z - r)) or (z > (cpos.z + r)) or load_all then
-        local chunk = self:get_chunk(x, z, player) or self.empty_chunk
-        if chunk then  -- the dimension may have no empty_chunk set
-          player.connection:send_chunk(x, z, chunk)
-        end
+        player.connection:send_chunk(x, z, self:get_chunk(x, z, player) or self.empty_chunk)
       end
     end
   end
 end
 
--- Creates a new Dimension. You should not call this function yourself, instead use `Server.create_dimension`!
+-- Creates a new Dimension. You should not call this function yourself, instead use `Server.create_dimension`! <br>
 ---@see Server.create_dimension
----@param identifier identifier   The identifier for the dimension, e.g. `"minecraft:overworld"`<br>
----@param dimension_type identifier?   The identifier of this dimension's type
+---@param options {identifier: identifier, dimension_type?: identifier, chunk_provider: ChunkProvider}
 ---@return Dimension
-function Dimension._new(identifier, dimension_type)
+function Dimension._new(options)
+  assert(options.identifier, "dimension identifier is required!")
+  assert(options.chunk_provider, "dimension chunk provider is required!")
+
   local self = {
-    identifier = identifier,
-    type = dimension_type or "minecraft:overworld",
+    identifier = options.identifier,
+    type = options.dimension_type or "minecraft:overworld",
     chunks = {},
+    chunk_provider = options.chunk_provider,
     view_distance = 4,
     players = {},
     entities = {},
     next_entity_id = 1,
     spawnpoint = Vector3.new(1, 66, 1)
   }
-  for x = -10, 10 do
-    self.chunks[x] = {}
-    for z = -4, 4 do
-      self.chunks[x][z] = Chunk.new(24)
-    end
-  end
   self.empty_chunk = Chunk.new_empty(24)
   setmetatable(self, { __index = Dimension })
   return self

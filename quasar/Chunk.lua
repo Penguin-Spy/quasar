@@ -33,6 +33,7 @@ local Chunk = {}
 
 -- increases the bits_per_entry by 1 and reshuffles data to fit
 local function expand_subchunk_palette(subchunk)
+  -- TODO: correctly resize from single value (bpe=0) subchunks too
   local old_bits_per_entry = subchunk.bits_per_entry
   local old_entries_per_long = 64 // old_bits_per_entry
   local old_data = subchunk.data
@@ -61,7 +62,8 @@ end
 ---@param pos blockpos    The absolute position in the world (this method converts to the position in the chunk internally)
 ---@param state integer   The block state ID to set at the position
 function Chunk:set_block(pos, state)
-  local subchunk = self.subchunks[(pos.y // 16) + 5]                      -- todo: adjust for bottom of world not always being at y=0
+  -- TODO: adjust for bottom of world not always being at y=0
+  local subchunk = self.subchunks[(pos.y // 16) + 5] ---@cast subchunk -nil
 
   -- ensure the state is in the palette
   if not subchunk.palette_contents[state] then
@@ -96,44 +98,51 @@ function Chunk:get_data()
     buffer:short(16 * 16 * 16)            -- block count
 
     buffer:byte(subchunk.bits_per_entry)  -- block palette bits per entry
-    buffer:varint(#subchunk.palette + 1)      -- # of palette entries
-    for i = 0, #subchunk.palette do
-      buffer:varint(subchunk.palette[i])
-    end
+    if subchunk.bits_per_entry > 0 then
+      buffer:varint(#subchunk.palette + 1)      -- # of palette entries
+      for i = 0, #subchunk.palette do
+        buffer:varint(subchunk.palette[i])
+      end
 
-    for _, data_entry in pairs(subchunk.data) do
-      buffer:long(data_entry)
+      for _, data_entry in pairs(subchunk.data) do
+        buffer:long(data_entry)
+      end
+
+    else -- single valued
+      buffer:varint(subchunk.palette[0])
     end
 
     buffer:byte(0)    -- biome palette type 0 (single valued)
-    buffer:varint(biome_registry_map["minecraft:plains"])  -- single value: 0
+    buffer:varint(biome_registry_map["minecraft:plains"])  -- single value: the id of minecraft:plains
   end
   return buffer:concat_with_length()
 end
 
--- Internal method
----@param height integer  Number of subchunks in this chunk
+-- creates a chunk from a list of chunk sections (subchunks)<br>
+-- the number of chunk sections determines the height of this chunk; subchunks are ordered from bottom to top
+---@param sections {block_states:integer[], block_palette:{[integer]:integer}}[] block_states is 1-based (list of longs), block_palette is 0-based
 ---@return Chunk
-local function new(height)
+local function new_from_data(sections)
   ---@type Chunk.subchunk[]
   local subchunks = {}
-  for i = 1, height do
-    local data = {}
-    for j = 1, 16 * 16 do  -- array of 256 Longs
-      if i <= 8 then
-        -- each Long is a line of 16 blocks along the X axis
-        data[j] = ((j % 16) > 1) and 0x0111111111111110 or 0x2000000000000002
-      else
-        data[j] = 0
+  for i = 1, #sections do
+    local section = sections[i]
+    local palette_length, bpe = #section.block_palette + 1, nil
+    if palette_length == 1 then
+      bpe = 0 -- single valued
+    else
+      bpe = math.max(math.ceil(math.log(palette_length, 2)), 4)
+      if bpe > 8 then
+        error("too large bits per entry: " .. tostring(bpe))
       end
     end
     ---@type Chunk.subchunk
     local subchunk = {
       block_count = 0,
-      bits_per_entry = 4,
-      palette = { [0] = 0, 1, 2, 3, 4, 5, 6, 7, 15, 16, 17, 18, 19, 20, 21, 22 },
+      bits_per_entry = bpe,
+      palette = section.block_palette,
       palette_contents = {},
-      data = data
+      data = section.block_states
     }
     for index, state in pairs(subchunk.palette) do
       subchunk.palette_contents[state] = index
@@ -153,17 +162,15 @@ local function new_empty(height)
     -- array of chunk section
     buffer:short(0)         -- block count
         :byte(0):varint(0)  -- block palette type 0, (single valued), single value: 0 (air)
-        :varint(0)          -- size of data array (0 for single valued)
         :byte(0):varint(0)  -- biome palette type 0 (single valued), single value: 0  (whatever the 1st biome in the registry is)
-        :varint(0)          -- size of data array (0 for single valued)
   end
   local data = buffer:concat_with_length()
   return {
     get_data = function() return data end
-  }
+  } --[[@as Chunk]]
 end
 
 return {
-  new = new,
+  new_from_data = new_from_data,
   new_empty = new_empty
 }
