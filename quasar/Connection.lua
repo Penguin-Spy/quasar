@@ -28,7 +28,7 @@ local dimension_type_registry = Registry.get_map("minecraft:dimension_type")
 local entity_type_registry = Registry.get_map("minecraft:entity_type")
 local chat_type_registry = Registry.get_map("minecraft:chat_type")
 
----@class Server
+---@type Server
 local Server
 -- only require "openssl.cipher", "openssl.digest", and "openssl.bignum" if the server has encryption enabled
 local cipher, digest, bn
@@ -231,16 +231,26 @@ function Connection:send_chunk(chunk_x, chunk_z, chunk)
   buffer:int(chunk_x)
   buffer:int(chunk_z)
 
+  -- chunk data
   buffer:varint(0)            -- 0 heightmaps
   buffer:raw(chunk_data)      -- chunk data (includes size)
-
   buffer:varint(0)            -- # of block entites
-  buffer:varint(0)            -- sky light mask (BitSet of length 0)
-  buffer:varint(0)            -- block light mask (BitSet of length 0)
-  buffer:varint(0)            -- empty sky light mask (BitSet of length 0)
-  buffer:varint(0)            -- empty sky light mask (BitSet of length 0)
-  buffer:varint(0)            -- sky light array count (empty array)
-  buffer:varint(0)            -- block light array count (empty array)
+
+  -- light data
+  buffer:varint(1)            -- sky light mask
+  buffer:long((1 << 26) - 1)  -- bitset of length 1 long, with 26 bits set
+  buffer:varint(0)            -- block light mask (none)
+  -- these technically should have bits set for all sections, but sending 0 has the same effect on the client
+  buffer:varint(0)            -- empty sky light mask
+  buffer:varint(0)            -- empty block light mask
+  -- sky light array
+  buffer:varint(26)           -- 26 arrays
+  for i = 1, 26 do
+    buffer:varint(2048)
+    buffer:raw(("\xFF"):rep(2048))  -- 2048 bytes (4096 nybbles, 1 per block)
+  end
+  -- block light arrays (none)
+  buffer:varint(0)
 
   self:send("level_chunk_with_light", buffer)
 end
@@ -390,15 +400,16 @@ end
 function Connection:respawn(data_kept, changing_dimension)
   local dim = self.player.dimension
   self:send("respawn", SendBuffer()
-    :varint(dimension_type_registry[dim.type])                       -- starting dim type (registry id)
-    :string(dim.identifier)                                          -- starting dim name
-    :long(0)                                                         -- hashed seeed
-    :byte(1):byte(255):boolean(false):boolean(false):boolean(false)  -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
-    :varint(0)                                                       -- portal cooldown (unknown use)
-    :varint(63)                                                      -- sea level
-    :byte(data_kept)                                                 -- normal respawns keep no data, dimension changes keep all, end portal only keeps attributes
+    :varint(dimension_type_registry[dim.type])              -- dimension type (registry id)
+    :string(dim.identifier)                                 -- dimension name
+    :long(0)                                                -- hashed seeed
+    :byte(1):byte(255)                                      -- game mode (creative), prev game mode (-1 undefined)
+    :boolean(false):boolean(dim.is_flat):boolean(false)     -- is debug, is flat, has death location
+    :varint(0)                                              -- portal cooldown (unknown use)
+    :varint(dim.sea_level)                                  -- sea level (unknown use)
+    :byte(data_kept)                                        -- normal respawns keep no data, dimension changes keep all, end portal only keeps attributes
   )
-  if changing_dimension then                                         -- must be sent before chunks for the new dimension
+  if changing_dimension then                                -- must be sent before chunks for the new dimension
     self:send("game_event", SendBuffer():byte(13):int(0))
   end
 end
@@ -673,18 +684,19 @@ handle(STATE_CONFIGURATION_WAIT_ACK, "finish_configuration", function (self)
 
   -- send login (Corresponds to "Loading terrain..." on the client connection screen)
   self:send("login", SendBuffer()
-    :int(0):boolean(false)                                           -- entity id, is hardcore
-    :varint(0)                                                       -- dimensions (appears to be ignored?)
-    :varint(0)                                                       -- "max players" (unused)
-    :varint(dim.view_distance):varint(5)                             -- view dist, sim dist
-    :boolean(false):boolean(true):boolean(false)                     -- reduced debug, respawn screen, limited crafting
-    :varint(dimension_type_registry[dim.type])                       -- starting dim type (registry id)
-    :string(dim.identifier)                                          -- starting dim name
-    :long(0)                                                         -- hashed seeed
-    :byte(1):byte(255):boolean(false):boolean(false):boolean(false)  -- game mode (creative), prev game mode (-1 undefined), is debug, is flat, has death location
-    :varint(0)                                                       -- portal cooldown (unknown use)
-    :varint(63)                                                      -- sea level
-    :boolean(true)                                                   -- enforces secure chat (causes giant warning toast to show up if false, seemingly no other effects?)
+    :int(0):boolean(false)                                -- entity id, is hardcore
+    :varint(0)                                            -- dimensions (appears to be ignored?)
+    :varint(0)                                            -- "max players" (unused)
+    :varint(dim.view_distance):varint(5)                  -- view dist, sim dist
+    :boolean(false):boolean(true):boolean(false)          -- reduced debug, respawn screen, limited crafting
+    :varint(dimension_type_registry[dim.type])            -- starting dim type (registry id)
+    :string(dim.identifier)                               -- starting dim name
+    :long(0)                                              -- hashed seeed
+    :byte(1):byte(255)                                    -- game mode (creative), prev game mode (-1 undefined)
+    :boolean(false):boolean(dim.is_flat):boolean(false)   -- is debug, is flat, has death location
+    :varint(0)                                            -- portal cooldown (unknown use)
+    :varint(dim.sea_level)                                -- sea level (unknown use)
+    :boolean(true)                                        -- enforces secure chat (causes giant warning toast to show up if false, seemingly no other effects?)
   )
 
   -- game event 13 (start waiting for chunks), float param of always 0 (4 bytes)

@@ -30,7 +30,9 @@ local Registry = require 'quasar.Registry'
 ---@field players Player[]      All players currently in this Dimension
 ---@field entities Entity[]
 ---@field next_entity_id number Starts at 1
----@field spawnpoint Vector3   The position where newly added players will spawn in
+---@field spawnpoint Vector3    The position where newly added players will spawn in
+---@field is_flat boolean       if the dimension is "flat", the skybox horizon is at -65 instead of 61. used for superflat worlds in vanilla.
+---@field sea_level integer     unknown effect on the client, unused on the server
 local Dimension = {}
 
 -- Called when a player breaks a block
@@ -291,9 +293,25 @@ function Dimension:_on_player_changed_chunk(player, cx, cz, load_all)
   end
 end
 
+---@class (exact) Dimension.options
+--- the identifier for this dimension
+---@field identifier identifier
+--- the type of this dimension; defaults to `"minecraft:overworld"`
+---@field type identifier?
+--- the chunk provider for the dimension
+---@field chunk_provider ChunkProvider
+--- the default spawn location for players joining the dimension. defaults to `(1, 65, 1)`
+---@field spawnpoint Vector3?
+--- defaults to `false`, if the dimension is "flat", the skybox horizon is at -65 instead of 61. used for superflat worlds in vanilla.
+---@field is_flat boolean?
+--- defaults to `63`, the sea level of the dimension; unknown effect on the client, unused on the server
+---@field sea_level integer?
+--- (unused) loading behavior for chunks
+----@field chunk_load_behavior "normal"|"load_all"|"stay_loaded"
+
 -- Creates a new Dimension. You should not call this function yourself, instead use `Server.create_dimension`! <br>
 ---@see Server.create_dimension
----@param options {identifier: identifier, dimension_type?: identifier, chunk_provider: ChunkProvider}
+---@param options Dimension.options
 ---@return Dimension
 function Dimension._new(options)
   assert(options.identifier, "dimension identifier is required!")
@@ -301,14 +319,16 @@ function Dimension._new(options)
 
   local self = {
     identifier = options.identifier,
-    type = options.dimension_type or "minecraft:overworld",
+    type = options.type or "minecraft:overworld",
     chunks = {},
     chunk_provider = options.chunk_provider,
     view_distance = 4,
     players = {},
     entities = {},
     next_entity_id = 1,
-    spawnpoint = Vector3.new(1, 66, 1)
+    spawnpoint = options.spawnpoint or Vector3.new(1, 65, 1),
+    is_flat = options.is_flat or false,
+    sea_level = options.sea_level or 63
   }
   self.empty_chunk = Chunk.new_empty(24)
   setmetatable(self, { __index = Dimension })

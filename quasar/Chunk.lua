@@ -16,6 +16,7 @@
 
 local SendBuffer = require "quasar.SendBuffer"
 local Registry = require "quasar.Registry"
+local util = require "quasar.util"
 
 local biome_registry_map = Registry.get_map("minecraft:worldgen/biome")
 
@@ -140,9 +141,11 @@ local function new_from_data(sections)
     local subchunk = {
       block_count = 0,
       bits_per_entry = bpe,
-      palette = section.block_palette,
+      -- copy palette & data to give each chunk a unique table
+      palette = util.copy(section.block_palette),
       palette_contents = {},
-      data = section.block_states
+      -- block_states is nil when the section is a single value
+      data = section.block_states and util.copy(section.block_states)
     }
     for index, state in pairs(subchunk.palette) do
       subchunk.palette_contents[state] = index

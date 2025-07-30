@@ -26,6 +26,18 @@ function util.remove_value(t, value)
   return false
 end
 
+--- shallow copies a table
+---@generic T : table
+---@param t T
+---@return T
+function util.copy(t)
+  local c = {}
+  for k, v in pairs(t) do
+    c[k] = v
+  end
+  return c
+end
+
 -- freezes a table, preventing assigning new values. not recursive (contained table values are not frozen)
 ---@generic T: table
 ---@param t T

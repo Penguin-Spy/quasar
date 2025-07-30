@@ -24,7 +24,7 @@ local log = require "quasar.log"
 ---@alias identifier string                                     A Minecraft identifier, in the form of `"namespace:thing"`
 ---@alias uuid       string                                     A UUID in binary form.
 ---@alias blockpos   {x: integer, y: integer, z: integer}       A block position in the world
----@alias text_component (string|{text:string,color:string?}|{translate:string,with:string[]})   A text component. May be either a string containing plain text or a Lua table representing a text component.
+---@alias text_component (string|{text:string,color:string?}|{translate:string,with?:string[]})   A text component. May be either a string containing plain text or a Lua table representing a text component.
 
 ---@class Server.status_response
 ---@field description text_component?   The MOTD of the server. The client also supports rendering section sign (§) formatted text here
@@ -41,6 +41,7 @@ local identifier_pattern = "^[%l%d_]+:[%l%d_]+$"
 ---@field port integer    The port the server is listening for connections on.
 local Server = {
   properties = {
+    ---@type boolean
     online_mode = true,
     motd = "A Quasar Server"
   },
@@ -57,7 +58,7 @@ local dimensions = {}
 local default_dimension = nil
 
 -- Creates a new Dimension.
----@param options {identifier: identifier, chunk_provider: ChunkProvider}   Options for the dimension
+---@param options Dimension.options
 ---@return Dimension
 function Server.create_dimension(options)
   local identifier = options.identifier
@@ -201,7 +202,7 @@ function Server.close()
     n_clients = n_clients + 1
   end
   for _, dim in pairs(dimensions) do
-    dim.timer:cancel()
+    -- dim.timer:cancel()
     n_dimensions = n_dimensions + 1
   end
 

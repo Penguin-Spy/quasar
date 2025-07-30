@@ -82,13 +82,13 @@ on finalize:
   generate 2-way maps for data and add to maps (and freeze them)
 ]]
 
----@type table<identifier, table<identifier,integer>|table<integer,identifier>>
+---@type table<identifier, table<identifier,integer> & table<integer,identifier>>
 local maps = {}
 ---@type table<identifier, table<identifier, table|true>>
 local datapack = {}
 ---@type table<identifier, table<identifier, identifier[]>>
 local tags = require "quasar.data.core_datapack_tags"
----@type table<integer,{[1]:string,[2]:true?,[string]:string}>|table<identifier,integer>
+---@type table<integer,{[1]:string,[2]:true?,[string]:string}> & table<identifier,integer>
 local block_state_map = require "quasar.data.blocks"
 
 -- Gets the registry map for the given category. <br>
@@ -96,7 +96,7 @@ local block_state_map = require "quasar.data.blocks"
 -- The map for types that are specified in the registry data tables will be **empty** until after
 -- the registry is finalized.
 ---@param category identifier
----@return table<identifier,integer>|table<integer,identifier>
+---@return table<identifier,integer> & table<integer,identifier>
 function Registry.get_map(category)
   return maps[category] or error(string.format("no registry map for category '%s'", category))
 end

@@ -6,16 +6,16 @@ Currently in development, not ready for normal usage.
 
 # Features
 - Players joining & seeing eachother
-- Chunk loading from region files
 - Block breaking/placing, persistent through client chunks unloading
 - Authentication/Encryption, player skins & skin layers
 - Player animations (arm swing, shifting)
-- Entities spawnable
+- Chunk loading from region files
+- Superflat chunk generation
 - Multiple dimensions & players able to travel between them
 - Vanilla Registry data, incl. block states, items, packets, etc.
+- Entities spawnable
 
 # Planned features
-- Chunk generation (very simple terrain) (in progress)
 - Survival block breaking
 - Helper for block placing from items (item id & facing -> blockstate)
 - Item GUIs
@@ -26,6 +26,7 @@ Currently in development, not ready for normal usage.
 
 ## back burner planned features
 - Chunk saving?
+- Additional chunk generation (simple 2d noise terrain)
 - Actual inventories (with items)
   - Survival inventory support (moving items)
   - Chest/external inventories (moving items within & between)
@@ -36,14 +37,17 @@ Currently in development, not ready for normal usage.
 - Dimensions distributed across multiple physical computers? (perhaps best left to proxy software & just transferring the player)
 
 # Dependencies
-- [Copas](https://lunarmodules.github.io/copas/index.html)
 - [LuaSocket](https://lunarmodules.github.io/luasocket/index.html)
+- [Lunajson](https://github.com/grafi-tt/lunajson)
+- [Copas](https://lunarmodules.github.io/copas/index.html)
 - [Lua OpenSSL](https://25thandclement.com/~william/projects/luaossl.html)
 ```sh
 luarocks install luasocket
+luarocks install lunajson
 luarocks install copas
 luarocks install luaossl
 ```
+Lua OpenSSL (`luaossl`) is not necessary if authentication/encryption ("online mode") is disabled.
 
 # License
 Copyright © Penguin_Spy 2024-2025  

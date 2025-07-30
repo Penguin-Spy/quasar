@@ -42,7 +42,7 @@ local function dump_to_string(t)
         table.insert(out, string.format("%s,", dump_to_string(t[key])))
         index = index + 1
       else
-        table.insert(out, string.format("[%s]=%s,", string.format("%q", key), dump_to_string(t[key])))
+        table.insert(out, string.format("[%q]=%s,", key, dump_to_string(t[key])))
       end
     end
     table.insert(out, "}")
